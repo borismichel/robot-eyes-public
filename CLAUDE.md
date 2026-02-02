@@ -1,5 +1,19 @@
 # Robot Eyes - Claude Project Notes
 
+## CRITICAL: Repository Structure
+
+There are TWO folders/repos:
+- **`robot-eyes/`** (PRIVATE) - Main development folder with full git history
+- **`robot-eyes-public/`** (PUBLIC) - Clean mirror without git history
+
+**Rules:**
+1. **All edits happen in the private folder** (`robot-eyes/`)
+2. **ASK before any git commit or push** - Do not commit or push without user approval
+3. **Public folder is read-only** - Only sync from private when user requests
+4. To sync public: copy files from private (excluding `.git/`), then commit as single update
+
+---
+
 ## CRITICAL: After Every Code Change
 
 1. **Build** - Always compile to verify changes:
@@ -17,7 +31,7 @@
    /Users/bmichel/.local/bin/pio run -t upload
    ```
 
-4. **Commit** - After completing any code change, always commit. Do not batch multiple features - commit each logical unit of work separately.
+4. **Commit** - After completing any code change, **ask user before committing**. Do not batch multiple features - commit each logical unit of work separately.
 
 ---
 

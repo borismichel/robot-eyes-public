@@ -240,19 +240,16 @@ inline EyeShape scared() {
 }
 
 /**
- * @brief Content - Satisfied, half-moon smile eyes
+ * @brief Content - Anime-style happy slit eyes "^_^"
  *
- * Classic "anime happy" look with half-moon shaped eyes. More extreme
- * version of happy with stronger outer corner raise and more closure.
- * Uses topCurve for crescent quality.
+ * Thin horizontal slits with rounded ends, like classic anime happy eyes.
+ * Simple symmetric pill shape that bounces up and down.
  */
 inline EyeShape content() {
     EyeShape s;
-    s.height = 0.5f;          // Half-moon shape (quite closed)
-    s.topLid = 0.35f;         // Lid closure
-    s.bottomLid = 0.1f;
-    s.topCurve = 0.5f;        // Crescent curve on top edge
-    s.outerCornerY = 0.3f;    // Strong smile raise
+    s.width = 0.1f;           // ~12px tall slit on screen
+    s.height = 0.8f;          // Wide horizontally (~80px)
+    s.cornerRadius = 1.5f;    // Very rounded for pill/slit shape
     return s;
 }
 
@@ -355,20 +352,16 @@ inline EyeShape yawn() {
 }
 
 /**
- * @brief ContentPetting - Relaxed half-closed for petting response
+ * @brief ContentPetting - Anime-style happy slit eyes "^_^"
  *
- * Half-closed crescent eyes showing relaxation and enjoyment.
- * Uses curves for a dreamy, content appearance.
+ * Thin horizontal slits with rounded ends, like classic anime happy eyes.
+ * Same as Content/Joy for consistent happy appearance when petted.
  */
 inline EyeShape contentPetting() {
     EyeShape s;
-    s.height = 0.6f;           // Relaxed height
-    s.topLid = 0.4f;           // Half-closed eyes
-    s.bottomLid = 0.1f;        // Slight bottom closure
-    s.topCurve = 0.6f;         // Crescent curve for dreamy look
-    s.bottomCurve = 0.2f;      // Subtle bottom curve
-    s.outerCornerY = 0.25f;    // Smile raise
-    s.cornerRadius = 1.0f;
+    s.width = 0.1f;           // ~12px tall slit on screen
+    s.height = 0.8f;          // Wide horizontally (~80px)
+    s.cornerRadius = 1.5f;    // Very rounded for pill/slit shape
     return s;
 }
 
@@ -415,18 +408,16 @@ inline EyeShape love() {
 }
 
 /**
- * @brief Joy - Eyes shut tight with happiness
+ * @brief Joy - Anime-style happy slit eyes "^_^" with bounce
  *
- * Both upper and lower lids closed tightly in a happy squeeze.
- * Used for random joy moments with bouncing animation.
+ * Thin horizontal slits with rounded ends, identical to Content.
+ * Simple symmetric pill shape that bounces up and down.
  */
 inline EyeShape joy() {
     EyeShape s;
-    s.height = 0.15f;          // Very squished/shut
-    s.topLid = 0.6f;           // Upper lid far closed
-    s.bottomLid = 0.4f;        // Lower lid far closed
-    s.outerCornerY = 0.3f;     // Happy raised outer corners
-    s.cornerRadius = 0.8f;     // Softly rounded
+    s.width = 0.1f;           // ~12px tall slit on screen
+    s.height = 0.8f;          // Wide horizontally (~80px)
+    s.cornerRadius = 1.5f;    // Very rounded for pill/slit shape
     return s;
 }
 

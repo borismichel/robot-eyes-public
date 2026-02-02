@@ -417,6 +417,7 @@ bool readTouch() {
             }
             preGestureExpression = Expression::Neutral;  // Return to neutral after petting
             pettingPulsePhase = 0.0f;
+            joyBouncePhase = 0.0f;  // Reset bounce for anime slit animation
             pettingSoundPlayed = false;  // Reset so we can play
             setExpression(Expression::ContentPetting);
             Serial.println("Petting detected!");
@@ -1402,6 +1403,7 @@ void loop() {
             pomodoroExpressActive = true;
             concentratePhase = 0;
             showingJoy = false;  // Clear joy animation from celebration
+            joyBouncePhase = 0.0f;  // Reset bounce for Content animation
             // Reset joy timer to prevent immediate random joy trigger
             nextJoyTime = now + JOY_MIN_INTERVAL + random(JOY_MAX_INTERVAL - JOY_MIN_INTERVAL);
             Serial.println("Pomodoro: Break started - Content expression");
@@ -1417,9 +1419,10 @@ void loop() {
                 audioPlayer.play("/complete.mp3");
                 Serial.println("Pomodoro: Work complete - Joy celebration with bounce!");
             } else {
-                // Break complete - just Content, ready to work again
+                // Break complete - just Content with bounce animation
                 setExpression(Expression::Content);
-                showingJoy = false;        // No bounce for break completion
+                showingJoy = false;        // Use Content bounce instead
+                joyBouncePhase = 0.0f;     // Reset bounce for Content
                 Serial.println("Pomodoro: Break complete - Content expression");
             }
             pomodoroExpressActive = true;
@@ -1458,10 +1461,15 @@ void loop() {
     // Pomodoro tick sound in last 60 seconds
     if (pomodoroTimer.isActive() && pomodoroTimer.isTickingEnabled() && pomodoroTimer.isLastMinute()) {
         uint32_t remaining = pomodoroTimer.getRemainingSeconds();
-        // Tick every second
+        // Tick every second, but only if not already playing (avoid race condition)
         if (remaining != (lastPomodoroTick / 1000)) {
             lastPomodoroTick = remaining * 1000;
-            audioPlayer.play("/tick.mp3");
+            if (!audioPlayer.isPlaying()) {
+                Serial.printf("Tick: %lu seconds remaining\n", remaining);
+                audioPlayer.play("/tick.mp3");
+            } else {
+                Serial.printf("Tick skipped (audio busy): %lu seconds\n", remaining);
+            }
         }
     }
 
@@ -1613,6 +1621,16 @@ void loop() {
             setExpression(expressionBeforeJoy);
             Serial.println("Joy ended");
         }
+    }
+
+    // Update Content bounce animation (for pomodoro breaks)
+    if (currentExpression == Expression::Content && pomodoroTimer.isActive()) {
+        joyBouncePhase += deltaTime * 3.0f;  // Same bounce rate as Joy
+    }
+
+    // Update petting bounce animation
+    if (isPetted) {
+        joyBouncePhase += deltaTime * 3.0f;  // Same bounce rate as Joy
     }
 
     //=========================================================================
@@ -1933,16 +1951,17 @@ void loop() {
             prevLeftRect.valid = false;
             prevRightRect.valid = false;
         } else if (prevLeftRect.valid || prevRightRect.valid) {
-            // Clear only previous eye bounding boxes (with extra margin for safety)
+            // Clear only previous eye bounding boxes (with extra margin for bounce animation)
+            // Bounce is ±15px, so need 20px margin to fully clear
             if (prevLeftRect.valid) {
                 clearRect(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
-                          prevLeftRect.x - 5, prevLeftRect.y - 5,
-                          prevLeftRect.w + 10, prevLeftRect.h + 10);
+                          prevLeftRect.x - 20, prevLeftRect.y - 5,
+                          prevLeftRect.w + 40, prevLeftRect.h + 10);
             }
             if (prevRightRect.valid) {
                 clearRect(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
-                          prevRightRect.x - 5, prevRightRect.y - 5,
-                          prevRightRect.w + 10, prevRightRect.h + 10);
+                          prevRightRect.x - 20, prevRightRect.y - 5,
+                          prevRightRect.w + 40, prevRightRect.h + 10);
             }
         } else {
             // First frame or invalid rects - full clear
@@ -1950,10 +1969,13 @@ void loop() {
             needFullBlit = true;
         }
 
-        // Normal eye rendering with optional bounce animation
+        // Normal eye rendering with optional bounce animation (Joy, Content, or Petting)
         int16_t bounceOffset = 0;
-        if (showingJoy) {
-            bounceOffset = (int16_t)(abs(sinf(joyBouncePhase * 2.0f * PI)) * 25.0f);
+        bool shouldBounce = showingJoy || isPetted ||
+            (currentExpression == Expression::Content && pomodoroTimer.isActive());
+        if (shouldBounce) {
+            // Bounce up and down (sin oscillates -1 to +1), 15px amplitude each direction
+            bounceOffset = (int16_t)(sinf(joyBouncePhase * 2.0f * PI) * 15.0f);
         }
 
         int16_t leftCX = leftEyePos.baseX - bounceOffset;

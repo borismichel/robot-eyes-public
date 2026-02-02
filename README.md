@@ -114,10 +114,6 @@ pio run -t uploadfs
 pio device monitor
 ```
 
-### Claude Code Users
-
-If you use [Claude Code](https://claude.ai/claude-code) for development, the `CLAUDE.md` file contains project-specific instructions. **You'll need to update the paths** in that file to match your system (e.g., the path to `pio` command).
-
 ## Usage
 
 ### Touch Gestures
