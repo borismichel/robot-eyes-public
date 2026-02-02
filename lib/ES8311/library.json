@@ -1,0 +1,7 @@
+{
+    "name": "ES8311",
+    "version": "1.0.0",
+    "description": "ES8311 Audio Codec Driver",
+    "frameworks": "arduino",
+    "platforms": "espressif32"
+}
