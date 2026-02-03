@@ -35,6 +35,12 @@ class WiFiManager;
 // Expression preview callback type
 typedef void (*ExpressionCallback)(int expressionIndex);
 
+// Audio test callback type
+typedef void (*AudioTestCallback)();
+
+// Current mood getter callback type
+typedef const char* (*MoodGetterCallback)();
+
 /**
  * @class WebServerManager
  * @brief HTTP server for remote settings management
@@ -80,8 +86,22 @@ public:
      */
     void setExpressionCallback(ExpressionCallback callback) { expressionCallback = callback; }
 
+    /**
+     * @brief Set callback for audio test
+     * @param callback Function to call when audio test is requested
+     */
+    void setAudioTestCallback(AudioTestCallback callback) { audioTestCallback = callback; }
+
+    /**
+     * @brief Set callback to get current mood/expression
+     * @param callback Function that returns current mood name
+     */
+    void setMoodGetterCallback(MoodGetterCallback callback) { moodGetterCallback = callback; }
+
 private:
     ExpressionCallback expressionCallback;
+    AudioTestCallback audioTestCallback;
+    MoodGetterCallback moodGetterCallback;
     httpd_handle_t server;
     SettingsMenu* settingsMenu;
     PomodoroTimer* pomodoroTimer;
@@ -102,6 +122,7 @@ private:
     static esp_err_t handlePomodoroStart(httpd_req_t* req);
     static esp_err_t handlePomodoroStop(httpd_req_t* req);
     static esp_err_t handlePostExpression(httpd_req_t* req);
+    static esp_err_t handleAudioTest(httpd_req_t* req);
 
     // Helper to get WebServerManager instance from request context
     static WebServerManager* getInstance(httpd_req_t* req);

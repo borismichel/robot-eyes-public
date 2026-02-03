@@ -29,7 +29,10 @@ Expressive robot eyes for ESP32-S3 with AMOLED display, inspired by Anki's Cozmo
 | Loud noise | Grumpy/irritated |
 
 ### Time & Mood
-- **Internal clock** with 12H/24H format
+- **NTP time sync**: Automatic time synchronization when WiFi is connected
+- **Timezone support**: Configurable GMT offset (-12 to +14 hours)
+- **12H/24H format**: Choose your preferred time display
+- **Fallback clock**: Internal millis-based clock when offline
 - **Mood shifts** based on time of day:
   - Morning (6am-12pm): Energetic, faster blinks
   - Afternoon: Balanced baseline
@@ -49,8 +52,9 @@ Expressive robot eyes for ESP32-S3 with AMOLED display, inspired by Anki's Cozmo
 - **Offline mode**: Eyes show normally, AP runs silently for optional web access
 - **Access**: `http://deskbuddy.local` or `http://192.168.4.1` (AP mode)
 - **Web UI tabs**: Dashboard, Display, Audio, Time, WiFi, Pomodoro, Expressions
-- **Dashboard**: Status, WiFi, IP, Pomodoro state, Time, Uptime
-- **Expression preview**: Click any of 30 expressions to preview live
+- **Dashboard**: Status, WiFi, IP, Current Mood, Time, Uptime
+- **Expression preview**: Click any of 30 expressions to preview live, current mood indicator
+- **Audio test**: Test speaker output from web UI
 - **Disable WiFi**: Completely turn off WiFi from web UI or device settings
 - **Factory reset**: Hold BOOT button 5+ seconds
 
@@ -104,27 +108,28 @@ Open with 2-finger tap, swipe up/down to navigate:
 
 **Pomodoro**: Start/Stop, Work duration, Short break, Long break, Sessions, Ticking, Back
 
-**Settings**: Volume, Brightness, Mic Gain, Mic Threshold, Eye Color (8 presets), Time, Time Format, WiFi (on/off), Back
+**Settings**: Volume, Brightness, Mic Gain, Mic Threshold, Eye Color (8 presets), Time, Time Format, Timezone, WiFi (on/off), Back
 
 ### Web Interface
 
 | Tab | Controls |
 |-----|----------|
-| Dashboard | Status cards, quick volume/brightness sliders |
+| Dashboard | Status cards, current mood, quick volume/brightness sliders |
 | Display | Brightness, eye color picker |
-| Audio | Volume, mic gain, mic threshold |
-| Time | Hour/minute, 12H/24H toggle |
-| WiFi | Status, scan networks, connect, forget |
+| Audio | Volume, mic gain, mic threshold, test audio button |
+| Time | Hour/minute, 12H/24H toggle, timezone (GMT offset) |
+| WiFi | Status, scan networks, connect, forget, NTP sync status |
 | Pomodoro | Start/stop, all duration settings |
-| Expressions | Grid of 30 buttons for live preview |
+| Expressions | Current mood indicator, grid of 30 buttons for live preview |
 
 ### REST API
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/status` | GET | WiFi, pomodoro, time, uptime |
-| `/api/settings` | GET/POST | All device settings |
+| `/api/status` | GET | WiFi, pomodoro, time, uptime, currentMood |
+| `/api/settings` | GET/POST | All device settings (incl. gmtOffsetHours) |
 | `/api/expression` | POST | Preview expression (index: 0-29) |
+| `/api/audio/test` | POST | Play test sound |
 | `/api/pomodoro/start` | POST | Start timer |
 | `/api/pomodoro/stop` | POST | Stop timer |
 | `/api/wifi/scan` | GET | Available networks |

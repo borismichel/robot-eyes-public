@@ -45,6 +45,8 @@ WebServerManager::WebServerManager()
     , wifiManager(nullptr)
     , settingsChanged(false)
     , expressionCallback(nullptr)
+    , audioTestCallback(nullptr)
+    , moodGetterCallback(nullptr)
 {
 }
 
@@ -64,7 +66,7 @@ bool WebServerManager::begin(SettingsMenu* settings, PomodoroTimer* pomodoro, Wi
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 14;
+    config.max_uri_handlers = 15;
 
     esp_err_t err = httpd_start(&server, &config);
     if (err != ESP_OK) {
@@ -180,6 +182,14 @@ bool WebServerManager::begin(SettingsMenu* settings, PomodoroTimer* pomodoro, Wi
     };
     httpd_register_uri_handler(server, &expressionUri);
 
+    httpd_uri_t audioTestUri = {
+        .uri = "/api/audio/test",
+        .method = HTTP_POST,
+        .handler = handleAudioTest,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &audioTestUri);
+
     Serial.printf("[WebServer] Started on port %d\n", config.server_port);
     return true;
 }
@@ -262,6 +272,9 @@ esp_err_t WebServerManager::handlePostSettings(httpd_req_t* req) {
     }
     if (doc["eyeColorIndex"].is<int>()) {
         self->settingsMenu->setColorIndex(doc["eyeColorIndex"].as<int>());
+    }
+    if (doc["gmtOffsetHours"].is<int>()) {
+        self->settingsMenu->setGmtOffsetHours(doc["gmtOffsetHours"].as<int>());
     }
 
     // Apply pomodoro settings
@@ -502,6 +515,19 @@ esp_err_t WebServerManager::handlePostExpression(httpd_req_t* req) {
     return ESP_OK;
 }
 
+esp_err_t WebServerManager::handleAudioTest(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    if (self->audioTestCallback) {
+        self->audioTestCallback();
+        Serial.println("[WebServer] Audio test triggered");
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true}");
+    return ESP_OK;
+}
+
 // ============================================================================
 // JSON Builders
 // ============================================================================
@@ -516,6 +542,7 @@ void WebServerManager::buildSettingsJson(JsonDocument& doc) {
     device["micThreshold"] = settingsMenu->getMicThreshold();
     device["eyeColorIndex"] = settingsMenu->getColorIndex();
     device["timeFormat"] = settingsMenu->is24HourFormat() ? "24h" : "12h";
+    device["gmtOffsetHours"] = settingsMenu->getGmtOffsetHours();
 
     if (pomodoroTimer) {
         JsonObject pomodoro = doc["pomodoro"].to<JsonObject>();
@@ -536,12 +563,21 @@ void WebServerManager::buildStatusJson(JsonDocument& doc) {
     // Uptime in seconds
     doc["uptimeSeconds"] = millis() / 1000;
 
+    // Current mood/expression
+    if (moodGetterCallback) {
+        doc["currentMood"] = moodGetterCallback();
+    }
+
     // Current time
     if (settingsMenu) {
         JsonObject time = doc["time"].to<JsonObject>();
         time["hour"] = settingsMenu->getTimeHour();
         time["minute"] = settingsMenu->getTimeMinute();
         time["is24Hour"] = settingsMenu->is24HourFormat();
+        time["gmtOffsetHours"] = settingsMenu->getGmtOffsetHours();
+        if (wifiManager) {
+            time["ntpSynced"] = wifiManager->isNtpSynced();
+        }
     }
 
     // WiFi status
@@ -1092,8 +1128,8 @@ String WebServerManager::generateSettingsPage() {
                     <div class="stat-value" id="dash-ip">--</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">Pomodoro</div>
-                    <div class="stat-value accent" id="dash-pomodoro">Idle</div>
+                    <div class="stat-label">Current Mood</div>
+                    <div class="stat-value accent" id="dash-mood">Neutral</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Current Time</div>
@@ -1175,6 +1211,7 @@ String WebServerManager::generateSettingsPage() {
                     </div>
                     <input type="range" id="micThreshold" min="0" max="100" value="50">
                 </div>
+                <button class="btn btn-secondary" onclick="testAudio()" style="margin-top: 16px;">Test Audio</button>
             </div>
         </section>
 
@@ -1182,8 +1219,45 @@ String WebServerManager::generateSettingsPage() {
         <section id="time" class="section">
             <span class="section-header">Time</span>
             <div class="card">
+                <div class="status-row">
+                    <span class="status-row-label">NTP Sync</span>
+                    <span class="status-row-value" id="ntp-status">--</span>
+                </div>
                 <div class="form-group">
-                    <div class="form-label"><span>Set Time</span></div>
+                    <div class="form-label"><span>Timezone (UTC)</span></div>
+                    <select id="timezone-select" class="wifi-input" onchange="setTimezone()">
+                        <option value="-12">UTC-12</option>
+                        <option value="-11">UTC-11</option>
+                        <option value="-10">UTC-10 (Hawaii)</option>
+                        <option value="-9">UTC-9 (Alaska)</option>
+                        <option value="-8">UTC-8 (Pacific)</option>
+                        <option value="-7">UTC-7 (Mountain)</option>
+                        <option value="-6">UTC-6 (Central)</option>
+                        <option value="-5">UTC-5 (Eastern)</option>
+                        <option value="-4">UTC-4 (Atlantic)</option>
+                        <option value="-3">UTC-3</option>
+                        <option value="-2">UTC-2</option>
+                        <option value="-1">UTC-1</option>
+                        <option value="0" selected>UTC+0 (GMT)</option>
+                        <option value="1">UTC+1 (CET)</option>
+                        <option value="2">UTC+2 (EET)</option>
+                        <option value="3">UTC+3 (Moscow)</option>
+                        <option value="4">UTC+4</option>
+                        <option value="5">UTC+5</option>
+                        <option value="5.5">UTC+5:30 (India)</option>
+                        <option value="6">UTC+6</option>
+                        <option value="7">UTC+7</option>
+                        <option value="8">UTC+8 (China)</option>
+                        <option value="9">UTC+9 (Japan)</option>
+                        <option value="10">UTC+10 (Sydney)</option>
+                        <option value="11">UTC+11</option>
+                        <option value="12">UTC+12</option>
+                        <option value="13">UTC+13</option>
+                        <option value="14">UTC+14</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <div class="form-label"><span>Manual Time (offline mode)</span></div>
                     <div class="time-row">
                         <select id="time-hour"></select>
                         <span>:</span>
@@ -1297,6 +1371,12 @@ String WebServerManager::generateSettingsPage() {
         <section id="expressions" class="section">
             <span class="section-header">Expression Preview</span>
             <div class="card">
+                <div class="status-row">
+                    <span class="status-row-label">Current Mood</span>
+                    <span class="status-row-value accent" id="expr-current-mood">Neutral</span>
+                </div>
+            </div>
+            <div class="card">
                 <div class="card-title">Click to preview on device</div>
                 <div class="expr-grid" id="expr-grid"></div>
             </div>
@@ -1337,6 +1417,15 @@ String WebServerManager::generateSettingsPage() {
             toast.textContent = msg;
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), 3000);
+        }
+
+        async function testAudio() {
+            try {
+                await fetch('/api/audio/test', { method: 'POST' });
+                showToast('Playing test sound');
+            } catch (e) {
+                showToast('Audio test failed', 'error');
+            }
         }
 
         function setConnected(connected) {
@@ -1384,6 +1473,13 @@ String WebServerManager::generateSettingsPage() {
                         timeStr = h12 + ':' + m.toString().padStart(2, '0') + ' ' + ampm;
                     }
                     document.getElementById('dash-time').textContent = timeStr;
+
+                    // NTP status
+                    const ntpEl = document.getElementById('ntp-status');
+                    if (ntpEl) {
+                        ntpEl.textContent = status.time.ntpSynced ? 'Synced' : 'Not synced';
+                        ntpEl.style.color = status.time.ntpSynced ? '#DFFF00' : '#888';
+                    }
                 }
 
                 // Uptime
@@ -1401,6 +1497,12 @@ String WebServerManager::generateSettingsPage() {
                         uptimeStr = mins + 'm';
                     }
                     document.getElementById('dash-uptime').textContent = uptimeStr;
+                }
+
+                // Current mood - update dashboard and expressions page
+                if (status.currentMood) {
+                    document.getElementById('dash-mood').textContent = status.currentMood;
+                    document.getElementById('expr-current-mood').textContent = status.currentMood;
                 }
 
                 // Check settings version
@@ -1452,6 +1554,14 @@ String WebServerManager::generateSettingsPage() {
                     document.getElementById('time-hour').value = time.hour;
                     document.getElementById('time-minute').value = time.minute;
                     document.getElementById('time-24h').checked = time.is24Hour;
+                    if (time.gmtOffsetHours !== undefined) {
+                        document.getElementById('timezone-select').value = time.gmtOffsetHours;
+                    }
+                }
+
+                // Also load timezone from device settings
+                if (settings.device && settings.device.gmtOffsetHours !== undefined) {
+                    document.getElementById('timezone-select').value = settings.device.gmtOffsetHours;
                 }
             } catch (e) {
                 console.error('Failed to load settings:', e);
@@ -1481,7 +1591,6 @@ String WebServerManager::generateSettingsPage() {
         function updatePomodoroUI(pomo) {
             const timeEl = document.getElementById('pomo-time');
             const stateEl = document.getElementById('pomo-state');
-            const dashPomo = document.getElementById('dash-pomodoro');
             const startBtn = document.getElementById('btn-start');
             const stopBtn = document.getElementById('btn-stop');
 
@@ -1490,13 +1599,11 @@ String WebServerManager::generateSettingsPage() {
                 const s = pomo.remainingSeconds % 60;
                 timeEl.textContent = m + ':' + s.toString().padStart(2, '0');
                 stateEl.textContent = pomo.state;
-                dashPomo.textContent = pomo.state;
                 startBtn.classList.add('hidden');
                 stopBtn.classList.remove('hidden');
             } else {
                 timeEl.textContent = '--:--';
                 stateEl.textContent = 'Ready';
-                dashPomo.textContent = 'Idle';
                 startBtn.classList.remove('hidden');
                 stopBtn.classList.add('hidden');
             }
@@ -1537,6 +1644,13 @@ String WebServerManager::generateSettingsPage() {
             document.getElementById('brightness-val').textContent = e.target.value + '%';
             updateSetting('brightness', e.target.value);
         });
+
+        // Timezone setting
+        function setTimezone() {
+            const tz = document.getElementById('timezone-select').value;
+            updateSetting('gmtOffsetHours', tz);
+            showToast('Timezone updated - NTP will re-sync');
+        }
 
         // Pomodoro
         async function startPomodoro() {

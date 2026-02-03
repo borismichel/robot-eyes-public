@@ -39,7 +39,7 @@ class PomodoroTimer;
 #define POMO_PAGE_BACK 6
 
 // Settings sub-menu pages
-#define SETTINGS_NUM_PAGES 9
+#define SETTINGS_NUM_PAGES 10
 #define SETTINGS_PAGE_VOLUME 0
 #define SETTINGS_PAGE_BRIGHTNESS 1
 #define SETTINGS_PAGE_MIC_GAIN 2
@@ -47,8 +47,9 @@ class PomodoroTimer;
 #define SETTINGS_PAGE_COLOR 4
 #define SETTINGS_PAGE_TIME 5
 #define SETTINGS_PAGE_TIME_FORMAT 6
-#define SETTINGS_PAGE_WIFI 7
-#define SETTINGS_PAGE_BACK 8
+#define SETTINGS_PAGE_TIMEZONE 7
+#define SETTINGS_PAGE_WIFI 8
+#define SETTINGS_PAGE_BACK 9
 
 // Swipe detection
 #define SWIPE_THRESHOLD 40  // Minimum pixels to register a swipe
@@ -94,8 +95,8 @@ public:
     int getMicThreshold() const { return values[3]; }    // Mic Threshold at values[3]
     int getColorIndex() const { return colorIndex; }
     uint16_t getColorRGB565() const;
-    int getTimeHour() const { return timeHour; }
-    int getTimeMinute() const { return timeMinute; }
+    int getTimeHour() const;
+    int getTimeMinute() const;
     bool is24HourFormat() const { return is24Hour; }
 
     // WiFi settings
@@ -158,6 +159,10 @@ public:
     void setTime(int hour, int minute);
     void setTimeFormat(bool use24Hour);
 
+    // Timezone getter/setter
+    int8_t getGmtOffsetHours() const { return gmtOffsetHours; }
+    void setGmtOffsetHours(int8_t hours);
+
     // Color setter (for web interface)
     void setColorIndex(int index);
 
@@ -170,6 +175,7 @@ private:
     int timeHour;           // 0-23
     int timeMinute;         // 0-59
     bool is24Hour;          // True for 24-hour format
+    int8_t gmtOffsetHours;  // Timezone offset in hours (-12 to +14)
     bool wifiEnabled;       // True to enable WiFi (AP or STA mode)
     bool offlineModeConfigured;  // True if user chose "Use Offline" on first boot
     uint32_t settingsVersion;  // Increments on any change (for web sync)

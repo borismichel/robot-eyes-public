@@ -187,6 +187,8 @@ const uint32_t TIME_TICK_INTERVAL = 60000;    // Advance clock every 60 seconds
 bool isShowingWiFiSetup = false;        // True during first-boot setup screen
 bool wifiSetupTouchWasActive = false;   // For detecting button taps
 bool wifiWasEnabled = true;             // Track WiFi enabled state for changes
+bool wifiWasConnected = false;          // Track WiFi connected state for NTP sync
+int8_t lastGmtOffsetHours = 0;          // Track timezone for NTP re-sync
 
 //=============================================================================
 // Micro-Expression Behavior - Random idle personality moments
@@ -324,6 +326,17 @@ void onWebExpressionPreview(int index) {
         setExpression((Expression)index);
         Serial.printf("Web expression preview: %s\n", getExpressionName((Expression)index));
     }
+}
+
+// Web audio test callback
+void onWebAudioTest() {
+    audioPlayer.play("/happy.mp3");
+    Serial.println("Web audio test: playing happy.mp3");
+}
+
+// Web mood getter callback
+const char* getCurrentMood() {
+    return getExpressionName(currentExpression);
 }
 
 TouchGesture detectGesture() {
@@ -1227,6 +1240,7 @@ void setup() {
     // Initialize WiFi manager
     wifiManager.begin(BOOT_BUTTON_PIN);
     wifiWasEnabled = settingsMenu.isWiFiEnabled();
+    lastGmtOffsetHours = settingsMenu.getGmtOffsetHours();
 
     // Check if WiFi is completely disabled in settings
     if (!settingsMenu.isWiFiEnabled()) {
@@ -1252,6 +1266,8 @@ void setup() {
     // Start web server (works in both AP and STA mode)
     webServer.begin(&settingsMenu, &pomodoroTimer, &wifiManager);
     webServer.setExpressionCallback(onWebExpressionPreview);
+    webServer.setAudioTestCallback(onWebAudioTest);
+    webServer.setMoodGetterCallback(getCurrentMood);
 
     // Initialize gaze tweeners
     gazeX.setSmoothTime(0.15f);
@@ -1311,6 +1327,14 @@ void loop() {
     // Update WiFi state machine (handles connection, reconnection, factory reset)
     wifiManager.update();
 
+    // Trigger NTP sync when WiFi first connects
+    bool wifiNowConnected = wifiManager.isConnected();
+    if (wifiNowConnected && !wifiWasConnected) {
+        // WiFi just connected - sync NTP with configured timezone
+        wifiManager.syncNTP(settingsMenu.getGmtOffsetHours() * 3600L);
+    }
+    wifiWasConnected = wifiNowConnected;
+
     // Update captive portal DNS server (only when in AP mode)
     if (wifiManager.isAPMode()) {
         if (!captivePortal.isRunning()) {
@@ -1333,6 +1357,16 @@ void loop() {
         audio.setThreshold(settingsMenu.getMicThreshold() / 100.0f);
         renderer.setColor(settingsMenu.getColorRGB565());
         webServer.clearSettingsChange();
+    }
+
+    // Handle timezone change - re-sync NTP with new offset
+    int8_t currentGmtOffset = settingsMenu.getGmtOffsetHours();
+    if (currentGmtOffset != lastGmtOffsetHours) {
+        lastGmtOffsetHours = currentGmtOffset;
+        if (wifiManager.isConnected()) {
+            Serial.printf("Timezone changed to UTC%+d - re-syncing NTP\n", currentGmtOffset);
+            wifiManager.syncNTP(currentGmtOffset * 3600L);
+        }
     }
 
     // Handle WiFi enable/disable changes from device settings menu

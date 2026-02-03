@@ -130,7 +130,7 @@ Hierarchical menu with main menu and sub-menus:
 - POMO_PAGE_TICKING (5): Toggle tick sound
 - POMO_PAGE_BACK (6): Return to main menu
 
-**Settings Sub-Menu (8 pages):**
+**Settings Sub-Menu (10 pages):**
 - SETTINGS_PAGE_VOLUME (0): Volume slider
 - SETTINGS_PAGE_BRIGHTNESS (1): Brightness slider
 - SETTINGS_PAGE_MIC_GAIN (2): Mic gain slider
@@ -138,7 +138,9 @@ Hierarchical menu with main menu and sub-menus:
 - SETTINGS_PAGE_COLOR (4): Color preset selector
 - SETTINGS_PAGE_TIME (5): Set hours/minutes
 - SETTINGS_PAGE_TIME_FORMAT (6): Toggle 12H/24H
-- SETTINGS_PAGE_BACK (7): Return to main menu
+- SETTINGS_PAGE_TIMEZONE (7): GMT offset (-12 to +14 hours)
+- SETTINGS_PAGE_WIFI (8): Toggle WiFi on/off
+- SETTINGS_PAGE_BACK (9): Return to main menu
 
 Navigation: Swipe up/down, tap to select/toggle
 Settings persisted via Preferences library
@@ -287,9 +289,10 @@ Uses ESP-IDF native `esp_http_server` for Arduino ESP32 3.x compatibility.
 ```cpp
 GET  /                  // Main web UI
 GET  /api/settings      // All settings JSON
-POST /api/settings      // Update settings (volume, brightness, micGain, micThreshold, eyeColorIndex, workMinutes, shortBreakMinutes, longBreakMinutes, sessionsBeforeLongBreak, tickingEnabled)
-GET  /api/status        // Status JSON (wifi, pomodoro, time, uptimeSeconds)
+POST /api/settings      // Update settings (volume, brightness, micGain, micThreshold, eyeColorIndex, gmtOffsetHours, workMinutes, shortBreakMinutes, longBreakMinutes, sessionsBeforeLongBreak, tickingEnabled)
+GET  /api/status        // Status JSON (wifi, pomodoro, time, uptimeSeconds, currentMood)
 POST /api/expression    // Preview expression (index: 0-29)
+POST /api/audio/test    // Play test sound (happy.mp3)
 POST /api/pomodoro/start
 POST /api/pomodoro/stop
 GET  /api/wifi/scan     // Returns array of {ssid, rssi, secure}
@@ -297,6 +300,12 @@ POST /api/wifi/connect  // {ssid, password}
 POST /api/wifi/forget   // Clears credentials
 POST /api/wifi/disable  // Disables WiFi completely (sets wifiEnabled=false)
 ```
+
+**NTP Time Sync:**
+- When WiFi connects, `wifiManager.syncNTP(gmtOffsetSec)` is called
+- Uses "pool.ntp.org" and "time.google.com" as NTP servers
+- `isNtpSynced()` checks if system time is valid (year >= 2024)
+- SettingsMenu `getTimeHour()`/`getTimeMinute()` use NTP time when available, fallback to internal clock
 
 **Settings Change Detection:**
 ```cpp
@@ -328,6 +337,10 @@ webServer.setExpressionCallback(onWebExpressionPreview);
 - Tabbed navigation: Dashboard, Display, Audio, Time, WiFi, Pomodoro, Expressions
 - Settings sync via polling `/api/status` every 1 second
 - Color picker: 8 presets matching device `COLOR_PRESETS` array order
+- Dashboard shows: WiFi status, IP, Current Mood, Time, Uptime
+- Audio tab has "Test Audio" button to verify speaker output
+- Time tab includes timezone (GMT offset) selector
+- Expressions tab shows current mood at top
 
 **Eye Color Order (must match device):**
 ```cpp

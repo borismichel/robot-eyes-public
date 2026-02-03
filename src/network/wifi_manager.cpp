@@ -21,6 +21,7 @@
  */
 
 #include "wifi_manager.h"
+#include <time.h>
 
 WiFiManager::WiFiManager()
     : state(WiFiState::Unconfigured)
@@ -29,6 +30,7 @@ WiFiManager::WiFiManager()
     , buttonHeldSince(0)
     , factoryResetPending(false)
     , mdnsStarted(false)
+    , ntpStarted(false)
 {
 }
 
@@ -283,4 +285,37 @@ int WiFiManager::getRSSI() const {
         return WiFi.RSSI();
     }
     return 0;
+}
+
+void WiFiManager::syncNTP(long gmtOffsetSec) {
+    if (state != WiFiState::Connected) {
+        Serial.println("[WiFi] Cannot sync NTP - not connected");
+        return;
+    }
+
+    Serial.printf("[WiFi] Starting NTP sync (GMT offset: %ld seconds)\n", gmtOffsetSec);
+    configTime(gmtOffsetSec, 0, "pool.ntp.org", "time.google.com");
+    ntpStarted = true;
+
+    // Wait briefly for initial sync (non-blocking check)
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo, 5000)) {  // Wait up to 5 seconds
+        Serial.printf("[WiFi] NTP synced: %04d-%02d-%02d %02d:%02d:%02d\n",
+                      timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    } else {
+        Serial.println("[WiFi] NTP sync pending (will continue in background)");
+    }
+}
+
+bool WiFiManager::isNtpSynced() const {
+    if (!ntpStarted) return false;
+
+    struct tm timeinfo;
+    // Quick check with 0 timeout
+    if (!getLocalTime(&timeinfo, 0)) {
+        return false;
+    }
+    // Valid if year is reasonable (2024+)
+    return timeinfo.tm_year >= 124;  // tm_year is years since 1900
 }

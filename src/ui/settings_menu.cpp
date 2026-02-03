@@ -12,6 +12,7 @@
 #include "settings_menu.h"
 #include "pomodoro.h"
 #include <cmath>
+#include <time.h>
 
 // Colors (RGB565)
 #define BG_COLOR           0x0000  // Black background
@@ -94,6 +95,7 @@ const char* SettingsMenu::settingsPageLabels[SETTINGS_NUM_PAGES] = {
     "COLOR",
     "TIME",
     "12-24H",
+    "TIMEZONE",
     "WIFI",
     "BACK"
 };
@@ -106,6 +108,7 @@ SettingsMenu::SettingsMenu()
     , timeHour(12)
     , timeMinute(0)
     , is24Hour(false)
+    , gmtOffsetHours(0)
     , wifiEnabled(true)
     , offlineModeConfigured(false)
     , settingsVersion(0)
@@ -399,13 +402,14 @@ void SettingsMenu::saveSettings() {
     prefs.putInt("micThr", values[3]);
     prefs.putInt("colorIdx", colorIndex);
     prefs.putBool("is24Hour", is24Hour);
+    prefs.putChar("gmtOffset", gmtOffsetHours);
     prefs.putBool("wifiOn", wifiEnabled);
     prefs.putBool("offlineCfg", offlineModeConfigured);
     prefs.end();
     settingsVersion++;  // Increment version for web sync detection
-    Serial.printf("Settings saved (v%u): Vol=%d, Brt=%d, WiFi=%s, Offline=%s\n",
-                  settingsVersion, values[0], values[1],
-                  wifiEnabled ? "ON" : "OFF", offlineModeConfigured ? "YES" : "NO");
+    Serial.printf("Settings saved (v%u): Vol=%d, Brt=%d, TZ=%+d, WiFi=%s\n",
+                  settingsVersion, values[0], values[1], gmtOffsetHours,
+                  wifiEnabled ? "ON" : "OFF");
 }
 
 void SettingsMenu::loadSettings() {
@@ -416,6 +420,7 @@ void SettingsMenu::loadSettings() {
     values[3] = prefs.getInt("micThr", 50);
     colorIndex = constrain(prefs.getInt("colorIdx", 0), 0, NUM_COLOR_PRESETS - 1);
     is24Hour = prefs.getBool("is24Hour", false);
+    gmtOffsetHours = prefs.getChar("gmtOffset", 0);  // Default: UTC
     wifiEnabled = prefs.getBool("wifiOn", true);  // Default: WiFi enabled
     offlineModeConfigured = prefs.getBool("offlineCfg", false);  // Default: not configured
     prefs.end();
@@ -472,8 +477,30 @@ void SettingsMenu::setOfflineModeConfigured(bool configured) {
     Serial.printf("Offline mode %s\n", configured ? "configured" : "cleared");
 }
 
+void SettingsMenu::setGmtOffsetHours(int8_t hours) {
+    gmtOffsetHours = constrain(hours, -12, 14);
+    saveSettings();
+    Serial.printf("Timezone set to UTC%+d\n", gmtOffsetHours);
+}
+
 uint16_t SettingsMenu::getColorRGB565() const {
     return COLOR_PRESETS[colorIndex];
+}
+
+int SettingsMenu::getTimeHour() const {
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo, 0)) {  // 0 = don't wait
+        return timeinfo.tm_hour;
+    }
+    return timeHour;  // Fallback to internal time
+}
+
+int SettingsMenu::getTimeMinute() const {
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo, 0)) {
+        return timeinfo.tm_min;
+    }
+    return timeMinute;  // Fallback to internal time
 }
 
 void SettingsMenu::drawFilledRect(uint16_t* buffer, int16_t bufW, int16_t bufH,
@@ -593,11 +620,13 @@ void SettingsMenu::drawTimeDisplay(uint16_t* buffer, int16_t bufW, int16_t bufH)
     int startX = (SCREEN_W - totalW) / 2;
     int digitY = SCREEN_H / 2 - digitH / 2 - 10;
 
-    // Get digits
-    int d0 = timeHour / 10;
-    int d1 = timeHour % 10;
-    int d2 = timeMinute / 10;
-    int d3 = timeMinute % 10;
+    // Get digits - use getters to get NTP time if available
+    int hour = getTimeHour();
+    int minute = getTimeMinute();
+    int d0 = hour / 10;
+    int d1 = hour % 10;
+    int d2 = minute / 10;
+    int d3 = minute % 10;
 
     // Draw all digits in cyan (the eye color)
     int16_t xPos = startX;
@@ -623,7 +652,7 @@ void SettingsMenu::drawTimeDisplay(uint16_t* buffer, int16_t bufW, int16_t bufH)
 
     // Show AM/PM for 12-hour mode
     if (!is24Hour) {
-        const char* ampm = (timeHour >= 12) ? "PM" : "AM";
+        const char* ampm = (hour >= 12) ? "PM" : "AM";
         drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, digitY + digitH + 20, ampm, ARROW_COLOR);
     }
 }
@@ -945,6 +974,19 @@ bool SettingsMenu::handleSettingsSubMenuTouch(bool touched, int16_t x, int16_t y
                 if (deltaY < 0) addMinutes(minutes);
                 else addMinutes(-minutes);
             }
+        } else if (isDraggingSlider && settingsSubPage == SETTINGS_PAGE_TIMEZONE) {
+            // Horizontal drag on timezone page
+            int hours = 0;
+            int absDelta = abs(deltaY);
+            if (absDelta > 100) hours = 3;
+            else if (absDelta > 50) hours = 2;
+            else if (absDelta > 25) hours = 1;
+
+            if (hours > 0) {
+                int newOffset = gmtOffsetHours + (deltaY < 0 ? hours : -hours);
+                gmtOffsetHours = constrain(newOffset, -12, 14);
+                Serial.printf("Timezone: UTC%+d\n", gmtOffsetHours);
+            }
         } else if (!isDraggingSlider && !isSwiping) {
             // Tap handling
             if (settingsSubPage == SETTINGS_PAGE_TIME) {
@@ -959,6 +1001,15 @@ bool SettingsMenu::handleSettingsSubMenuTouch(bool touched, int16_t x, int16_t y
             } else if (settingsSubPage == SETTINGS_PAGE_TIME_FORMAT) {
                 is24Hour = !is24Hour;
                 Serial.printf("Time format: %s\n", is24Hour ? "24H" : "12H");
+            } else if (settingsSubPage == SETTINGS_PAGE_TIMEZONE) {
+                // Tap left half = decrement, tap right half = increment
+                if (lastY > SCREEN_W / 2) {
+                    gmtOffsetHours = constrain(gmtOffsetHours + 1, -12, 14);
+                } else {
+                    gmtOffsetHours = constrain(gmtOffsetHours - 1, -12, 14);
+                }
+                Serial.printf("Timezone: UTC%+d\n", gmtOffsetHours);
+                saveSettings();
             } else if (settingsSubPage == SETTINGS_PAGE_WIFI) {
                 wifiEnabled = !wifiEnabled;
                 Serial.printf("WiFi: %s\n", wifiEnabled ? "ON" : "OFF");
@@ -1075,16 +1126,29 @@ void SettingsMenu::renderSettingsSubMenu(uint16_t* buffer, int16_t bufW, int16_t
         drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 - 30, formatStr, SLIDER_FILL_COLOR);
 
         char exampleStr[16];
+        int hour = getTimeHour();
+        int minute = getTimeMinute();
         if (is24Hour) {
-            sprintf(exampleStr, "%02d:%02d", timeHour, timeMinute);
+            sprintf(exampleStr, "%02d:%02d", hour, minute);
         } else {
-            int displayHour = timeHour % 12;
+            int displayHour = hour % 12;
             if (displayHour == 0) displayHour = 12;
-            const char* ampm = (timeHour >= 12) ? "PM" : "AM";
-            sprintf(exampleStr, "%d:%02d %s", displayHour, timeMinute, ampm);
+            const char* ampm = (hour >= 12) ? "PM" : "AM";
+            sprintf(exampleStr, "%d:%02d %s", displayHour, minute, ampm);
         }
         drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 + 20, exampleStr, TEXT_COLOR);
         drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H - 40, "TAP TO TOGGLE", ARROW_COLOR);
+    } else if (settingsSubPage == SETTINGS_PAGE_TIMEZONE) {
+        // Timezone offset display
+        char tzStr[16];
+        if (gmtOffsetHours >= 0) {
+            sprintf(tzStr, "UTC+%d", gmtOffsetHours);
+        } else {
+            sprintf(tzStr, "UTC%d", gmtOffsetHours);
+        }
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 - 30, tzStr, SLIDER_FILL_COLOR);
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 + 20, "FOR NTP SYNC", TEXT_COLOR);
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H - 40, "TAP +/- OR DRAG", ARROW_COLOR);
     } else if (settingsSubPage == SETTINGS_PAGE_WIFI) {
         // WiFi on/off toggle
         const char* wifiStatus = wifiEnabled ? "WIFI ON" : "WIFI OFF";
@@ -1135,11 +1199,13 @@ void SettingsMenu::renderTimeOnly(uint16_t* buffer, int16_t bufWidth, int16_t bu
     int startX = (SCREEN_W - totalW) / 2;
     int digitY = SCREEN_H / 2 - digitH / 2;
 
-    // Get digits
-    int d0 = timeHour / 10;
-    int d1 = timeHour % 10;
-    int d2 = timeMinute / 10;
-    int d3 = timeMinute % 10;
+    // Get digits - use getters to get NTP time if available
+    int hour = getTimeHour();
+    int minute = getTimeMinute();
+    int d0 = hour / 10;
+    int d1 = hour % 10;
+    int d2 = minute / 10;
+    int d3 = minute % 10;
 
     // Draw all digits in the eye color
     int16_t xPos = startX;

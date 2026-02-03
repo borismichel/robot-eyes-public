@@ -150,6 +150,18 @@ public:
      */
     float getFactoryResetProgress() const;
 
+    /**
+     * @brief Start NTP time sync with timezone offset
+     * @param gmtOffsetSec Timezone offset in seconds (e.g., -5*3600 for EST)
+     */
+    void syncNTP(long gmtOffsetSec);
+
+    /**
+     * @brief Check if NTP time has been synchronized
+     * @return True if system time is valid (synced from NTP)
+     */
+    bool isNtpSynced() const;
+
 private:
     WiFiState state;
     Preferences prefs;
@@ -168,6 +180,9 @@ private:
 
     // mDNS registered
     bool mdnsStarted;
+
+    // NTP sync state
+    bool ntpStarted;
 
     void loadCredentials();
     void startMDNS();
