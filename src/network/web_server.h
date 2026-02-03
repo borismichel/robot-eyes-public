@@ -15,6 +15,7 @@
  * - GET /api/wifi/scan  - Scan for WiFi networks
  * - POST /api/wifi/connect - Connect to new WiFi
  * - POST /api/wifi/forget  - Clear saved WiFi credentials
+ * - POST /api/wifi/disable - Disable WiFi completely
  * - POST /api/pomodoro/start - Start pomodoro timer
  * - POST /api/pomodoro/stop  - Stop pomodoro timer
  */
@@ -95,6 +96,7 @@ private:
     static esp_err_t handleWiFiScan(httpd_req_t* req);
     static esp_err_t handleWiFiConnect(httpd_req_t* req);
     static esp_err_t handleWiFiForget(httpd_req_t* req);
+    static esp_err_t handleWiFiDisable(httpd_req_t* req);
     static esp_err_t handleGetTime(httpd_req_t* req);
     static esp_err_t handlePostTime(httpd_req_t* req);
     static esp_err_t handlePomodoroStart(httpd_req_t* req);

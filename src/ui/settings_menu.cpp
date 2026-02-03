@@ -94,6 +94,7 @@ const char* SettingsMenu::settingsPageLabels[SETTINGS_NUM_PAGES] = {
     "COLOR",
     "TIME",
     "12-24H",
+    "WIFI",
     "BACK"
 };
 
@@ -105,6 +106,8 @@ SettingsMenu::SettingsMenu()
     , timeHour(12)
     , timeMinute(0)
     , is24Hour(false)
+    , wifiEnabled(true)
+    , offlineModeConfigured(false)
     , settingsVersion(0)
     , pomoSubMenuOpen(false)
     , pomoSubPage(0)
@@ -396,11 +399,13 @@ void SettingsMenu::saveSettings() {
     prefs.putInt("micThr", values[3]);
     prefs.putInt("colorIdx", colorIndex);
     prefs.putBool("is24Hour", is24Hour);
+    prefs.putBool("wifiOn", wifiEnabled);
+    prefs.putBool("offlineCfg", offlineModeConfigured);
     prefs.end();
     settingsVersion++;  // Increment version for web sync detection
-    Serial.printf("Settings saved (v%u): Vol=%d, Brt=%d, MicGain=%d, MicThr=%d, Color=%s, Format=%s\n",
-                  settingsVersion, values[0], values[1], values[2], values[3],
-                  COLOR_PRESET_NAMES[colorIndex], is24Hour ? "24H" : "12H");
+    Serial.printf("Settings saved (v%u): Vol=%d, Brt=%d, WiFi=%s, Offline=%s\n",
+                  settingsVersion, values[0], values[1],
+                  wifiEnabled ? "ON" : "OFF", offlineModeConfigured ? "YES" : "NO");
 }
 
 void SettingsMenu::loadSettings() {
@@ -411,10 +416,12 @@ void SettingsMenu::loadSettings() {
     values[3] = prefs.getInt("micThr", 50);
     colorIndex = constrain(prefs.getInt("colorIdx", 0), 0, NUM_COLOR_PRESETS - 1);
     is24Hour = prefs.getBool("is24Hour", false);
+    wifiEnabled = prefs.getBool("wifiOn", true);  // Default: WiFi enabled
+    offlineModeConfigured = prefs.getBool("offlineCfg", false);  // Default: not configured
     prefs.end();
-    Serial.printf("Settings loaded: Vol=%d, Brt=%d, MicGain=%d, MicThr=%d, Color=%s, Format=%s\n",
-                  values[0], values[1], values[2], values[3],
-                  COLOR_PRESET_NAMES[colorIndex], is24Hour ? "24H" : "12H");
+    Serial.printf("Settings loaded: Vol=%d, Brt=%d, WiFi=%s, Offline=%s\n",
+                  values[0], values[1],
+                  wifiEnabled ? "ON" : "OFF", offlineModeConfigured ? "YES" : "NO");
 }
 
 void SettingsMenu::setVolume(int val) {
@@ -451,6 +458,18 @@ void SettingsMenu::setTimeFormat(bool use24Hour) {
 void SettingsMenu::setColorIndex(int index) {
     colorIndex = constrain(index, 0, NUM_COLOR_PRESETS - 1);
     saveSettings();
+}
+
+void SettingsMenu::setWiFiEnabled(bool enabled) {
+    wifiEnabled = enabled;
+    saveSettings();
+    Serial.printf("WiFi %s\n", enabled ? "enabled" : "disabled");
+}
+
+void SettingsMenu::setOfflineModeConfigured(bool configured) {
+    offlineModeConfigured = configured;
+    saveSettings();
+    Serial.printf("Offline mode %s\n", configured ? "configured" : "cleared");
 }
 
 uint16_t SettingsMenu::getColorRGB565() const {
@@ -940,6 +959,10 @@ bool SettingsMenu::handleSettingsSubMenuTouch(bool touched, int16_t x, int16_t y
             } else if (settingsSubPage == SETTINGS_PAGE_TIME_FORMAT) {
                 is24Hour = !is24Hour;
                 Serial.printf("Time format: %s\n", is24Hour ? "24H" : "12H");
+            } else if (settingsSubPage == SETTINGS_PAGE_WIFI) {
+                wifiEnabled = !wifiEnabled;
+                Serial.printf("WiFi: %s\n", wifiEnabled ? "ON" : "OFF");
+                saveSettings();
             } else if (settingsSubPage == SETTINGS_PAGE_BACK) {
                 closeSettingsSubMenu();
             }
@@ -1061,6 +1084,18 @@ void SettingsMenu::renderSettingsSubMenu(uint16_t* buffer, int16_t bufW, int16_t
             sprintf(exampleStr, "%d:%02d %s", displayHour, timeMinute, ampm);
         }
         drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 + 20, exampleStr, TEXT_COLOR);
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H - 40, "TAP TO TOGGLE", ARROW_COLOR);
+    } else if (settingsSubPage == SETTINGS_PAGE_WIFI) {
+        // WiFi on/off toggle
+        const char* wifiStatus = wifiEnabled ? "WIFI ON" : "WIFI OFF";
+        uint16_t statusColor = wifiEnabled ? SLIDER_FILL_COLOR : ARROW_COLOR;
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 - 30, wifiStatus, statusColor);
+
+        if (wifiEnabled) {
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 + 20, "AP OR NETWORK", TEXT_COLOR);
+        } else {
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 + 20, "NO CONNECTION", TEXT_COLOR);
+        }
         drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H - 40, "TAP TO TOGGLE", ARROW_COLOR);
     } else if (settingsSubPage == SETTINGS_PAGE_BACK) {
         drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 - 15, "TAP TO", TEXT_COLOR);
@@ -1234,5 +1269,44 @@ void SettingsMenu::renderWiFiSetup(uint16_t* buffer, int16_t bufWidth, int16_t b
     y += lineSpacing;
 
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "192.168.4.1", color);
+}
+
+void SettingsMenu::renderFirstBootSetup(uint16_t* buffer, int16_t bufWidth, int16_t bufHeight, uint16_t color) {
+    // Clear buffer to black
+    for (int i = 0; i < bufWidth * bufHeight; i++) {
+        buffer[i] = BG_COLOR;
+    }
+
+    // Title at top
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, 30, "WELCOME", color);
+
+    // WiFi AP info section (compact)
+    int16_t y = 80;
+    const int lineSpacing = 35;
+
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "WIFI NETWORK", TEXT_COLOR);
+    y += lineSpacing;
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "DESKBUDDY-SETUP", color);
+    y += lineSpacing;
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "PASS: DESKBUDDY", TEXT_COLOR);
+
+    // Divider line position
+    int16_t dividerY = SCREEN_H / 2;
+
+    // Draw horizontal divider line
+    drawFilledRect(buffer, bufWidth, bufHeight, 40, dividerY - 1, SCREEN_W - 80, 2, TEXT_COLOR);
+
+    // Top button area: "Configure WiFi" (above divider)
+    int16_t topButtonY = dividerY - 60;
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, topButtonY, "TAP HERE TO", TEXT_COLOR);
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, topButtonY + 35, "CONFIGURE WIFI", color);
+
+    // Bottom button area: "Use Offline" (below divider)
+    int16_t bottomButtonY = dividerY + 40;
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, bottomButtonY, "TAP HERE TO", TEXT_COLOR);
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, bottomButtonY + 35, "USE OFFLINE", color);
+
+    // Hint at bottom
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, SCREEN_H - 30, "AP STAYS ON FOR CONFIG", ARROW_COLOR);
 }
 

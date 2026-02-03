@@ -20,6 +20,7 @@
 
 // WiFi connection states
 enum class WiFiState {
+    Disabled,           // WiFi completely off
     Unconfigured,       // No saved credentials
     APMode,             // Running as access point
     Connecting,         // Attempting to connect to saved network
@@ -122,6 +123,22 @@ public:
      * @brief Clear saved credentials (factory reset)
      */
     void clearCredentials();
+
+    /**
+     * @brief Completely disable WiFi (no AP, no STA)
+     */
+    void disable();
+
+    /**
+     * @brief Re-enable WiFi after being disabled
+     * Will start AP mode or connect to saved network
+     */
+    void enable();
+
+    /**
+     * @brief Check if WiFi is disabled
+     */
+    bool isDisabled() const { return state == WiFiState::Disabled; }
 
     /**
      * @brief Check if factory reset is in progress

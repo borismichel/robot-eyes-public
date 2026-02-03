@@ -39,7 +39,7 @@ class PomodoroTimer;
 #define POMO_PAGE_BACK 6
 
 // Settings sub-menu pages
-#define SETTINGS_NUM_PAGES 8
+#define SETTINGS_NUM_PAGES 9
 #define SETTINGS_PAGE_VOLUME 0
 #define SETTINGS_PAGE_BRIGHTNESS 1
 #define SETTINGS_PAGE_MIC_GAIN 2
@@ -47,7 +47,8 @@ class PomodoroTimer;
 #define SETTINGS_PAGE_COLOR 4
 #define SETTINGS_PAGE_TIME 5
 #define SETTINGS_PAGE_TIME_FORMAT 6
-#define SETTINGS_PAGE_BACK 7
+#define SETTINGS_PAGE_WIFI 7
+#define SETTINGS_PAGE_BACK 8
 
 // Swipe detection
 #define SWIPE_THRESHOLD 40  // Minimum pixels to register a swipe
@@ -97,6 +98,12 @@ public:
     int getTimeMinute() const { return timeMinute; }
     bool is24HourFormat() const { return is24Hour; }
 
+    // WiFi settings
+    bool isWiFiEnabled() const { return wifiEnabled; }
+    bool isOfflineModeConfigured() const { return offlineModeConfigured; }
+    void setWiFiEnabled(bool enabled);
+    void setOfflineModeConfigured(bool configured);
+
     /**
      * @brief Get settings version (increments on any change)
      * Used for detecting changes from web interface
@@ -130,6 +137,13 @@ public:
     void renderWiFiSetup(uint16_t* buffer, int16_t bufWidth, int16_t bufHeight, uint16_t color);
 
     /**
+     * @brief Render first-boot setup screen with interactive buttons
+     * Shows AP info plus "Configure WiFi" and "Use Offline" button areas
+     * @param color RGB565 color for accent text
+     */
+    void renderFirstBootSetup(uint16_t* buffer, int16_t bufWidth, int16_t bufHeight, uint16_t color);
+
+    /**
      * @brief Advance time by specified minutes (for clock tick)
      */
     void tickMinute() { addMinutes(1); }
@@ -156,6 +170,8 @@ private:
     int timeHour;           // 0-23
     int timeMinute;         // 0-59
     bool is24Hour;          // True for 24-hour format
+    bool wifiEnabled;       // True to enable WiFi (AP or STA mode)
+    bool offlineModeConfigured;  // True if user chose "Use Offline" on first boot
     uint32_t settingsVersion;  // Increments on any change (for web sync)
     Preferences prefs;
 

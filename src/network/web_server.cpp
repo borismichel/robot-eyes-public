@@ -132,6 +132,14 @@ bool WebServerManager::begin(SettingsMenu* settings, PomodoroTimer* pomodoro, Wi
     };
     httpd_register_uri_handler(server, &wifiForgetUri);
 
+    httpd_uri_t wifiDisableUri = {
+        .uri = "/api/wifi/disable",
+        .method = HTTP_POST,
+        .handler = handleWiFiDisable,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &wifiDisableUri);
+
     httpd_uri_t getTimeUri = {
         .uri = "/api/time",
         .method = HTTP_GET,
@@ -388,6 +396,20 @@ esp_err_t WebServerManager::handleWiFiForget(httpd_req_t* req) {
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"WiFi credentials cleared. Device will restart in AP mode.\"}");
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleWiFiDisable(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    // Disable WiFi in settings - main loop will detect the change and call wifiManager.disable()
+    if (self->settingsMenu) {
+        self->settingsMenu->setWiFiEnabled(false);
+        self->settingsChanged = true;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"WiFi will be disabled. Use device settings to re-enable.\"}");
     return ESP_OK;
 }
 
@@ -1210,6 +1232,8 @@ String WebServerManager::generateSettingsPage() {
             <div class="card">
                 <div class="card-title">Danger Zone</div>
                 <button class="btn btn-danger" onclick="forgetWiFi()">Forget Network</button>
+                <button class="btn btn-danger" onclick="disableWiFi()" style="margin-left: 8px;">Disable WiFi</button>
+                <p style="margin-top: 12px; font-size: 12px; color: #888;">Disabling WiFi will disconnect this page. Use device settings to re-enable.</p>
             </div>
         </section>
 
@@ -1611,6 +1635,14 @@ String WebServerManager::generateSettingsPage() {
             try {
                 await fetch('/api/wifi/forget', { method: 'POST' });
                 showToast('WiFi cleared');
+            } catch (e) { showToast('Failed', 'error'); }
+        }
+
+        async function disableWiFi() {
+            if (!confirm('Disable WiFi completely?\\n\\nThis will disconnect this page immediately.\\nUse the device settings menu to re-enable WiFi.')) return;
+            try {
+                await fetch('/api/wifi/disable', { method: 'POST' });
+                showToast('WiFi disabled');
             } catch (e) { showToast('Failed', 'error'); }
         }
 

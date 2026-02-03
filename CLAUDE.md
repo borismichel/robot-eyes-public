@@ -249,6 +249,7 @@ Network module in `src/network/`:
 
 ```cpp
 enum class WiFiState {
+    Disabled,           // WiFi completely off (no AP, no STA)
     Unconfigured,       // No saved credentials - start AP mode
     APMode,             // Running as access point for setup
     Connecting,         // Attempting to connect to saved network
@@ -262,6 +263,16 @@ enum class WiFiState {
 - Password: `deskbuddy`
 - IP: `192.168.4.1`
 - Connect timeout: 15 seconds
+
+**First Boot Flow:**
+1. Device shows setup screen with "Configure WiFi" / "Use Offline" buttons
+2. "Configure WiFi" → Eyes show, AP runs for web configuration
+3. "Use Offline" → Sets `offlineModeConfigured=true`, eyes show, AP runs silently
+
+**WiFi Disable:**
+- Toggle via device settings menu (Settings → WiFi)
+- Toggle via web UI (WiFi tab → Disable WiFi button with confirmation)
+- Calls `wifiManager.disable()` which sets `WIFI_OFF` mode
 
 **Factory Reset:**
 - Hold BOOT button for 5+ seconds
@@ -284,6 +295,7 @@ POST /api/pomodoro/stop
 GET  /api/wifi/scan     // Returns array of {ssid, rssi, secure}
 POST /api/wifi/connect  // {ssid, password}
 POST /api/wifi/forget   // Clears credentials
+POST /api/wifi/disable  // Disables WiFi completely (sets wifiEnabled=false)
 ```
 
 **Settings Change Detection:**

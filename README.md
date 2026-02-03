@@ -44,11 +44,14 @@ Expressive robot eyes for ESP32-S3 with AMOLED display, inspired by Anki's Cozmo
 - **Configurable**: Work (1-60 min), breaks (1-60 min), sessions (1-8)
 
 ### WiFi & Remote Control
-- **Setup**: Connect to `DeskBuddy-Setup` AP, configure via captive portal
-- **Access**: `http://deskbuddy.local` or device IP
+- **First boot**: Setup screen with "Configure WiFi" or "Use Offline" options
+- **Setup**: Connect to `DeskBuddy-Setup` AP (password: `deskbuddy`), configure via web
+- **Offline mode**: Eyes show normally, AP runs silently for optional web access
+- **Access**: `http://deskbuddy.local` or `http://192.168.4.1` (AP mode)
 - **Web UI tabs**: Dashboard, Display, Audio, Time, WiFi, Pomodoro, Expressions
 - **Dashboard**: Status, WiFi, IP, Pomodoro state, Time, Uptime
 - **Expression preview**: Click any of 30 expressions to preview live
+- **Disable WiFi**: Completely turn off WiFi from web UI or device settings
 - **Factory reset**: Hold BOOT button 5+ seconds
 
 ---
@@ -78,11 +81,17 @@ pio device monitor
 ```
 
 ### WiFi Setup
-1. On first boot, connect to WiFi `DeskBuddy-Setup` (password: `deskbuddy`)
-2. Browser opens setup page (or go to `http://192.168.4.1`)
-3. Select your network and enter password
-4. Device reboots and connects automatically
-5. Access web UI at `http://deskbuddy.local`
+1. On first boot, device shows setup screen with two options:
+   - **Configure WiFi**: Tap top half to proceed with WiFi setup
+   - **Use Offline**: Tap bottom half to use without network (AP stays on for later config)
+2. Connect phone/computer to WiFi `DeskBuddy-Setup` (password: `deskbuddy`)
+3. Open `http://192.168.4.1` in browser
+4. Select your network and enter password
+5. Device connects automatically, access web UI at `http://deskbuddy.local`
+
+**Offline Mode**: If you choose "Use Offline", eyes display normally but the AP remains running silently. You can still configure settings via web at any time by connecting to the AP.
+
+**Disable WiFi**: To completely turn off WiFi (no AP, no network), use the device settings menu (Settings → WiFi → tap to toggle) or the web UI (WiFi tab → Disable WiFi).
 
 ---
 
@@ -95,7 +104,7 @@ Open with 2-finger tap, swipe up/down to navigate:
 
 **Pomodoro**: Start/Stop, Work duration, Short break, Long break, Sessions, Ticking, Back
 
-**Settings**: Volume, Brightness, Mic Gain, Mic Threshold, Eye Color (8 presets), Time, Time Format, Back
+**Settings**: Volume, Brightness, Mic Gain, Mic Threshold, Eye Color (8 presets), Time, Time Format, WiFi (on/off), Back
 
 ### Web Interface
 
@@ -121,6 +130,7 @@ Open with 2-finger tap, swipe up/down to navigate:
 | `/api/wifi/scan` | GET | Available networks |
 | `/api/wifi/connect` | POST | Connect (ssid, password) |
 | `/api/wifi/forget` | POST | Clear credentials |
+| `/api/wifi/disable` | POST | Disable WiFi completely |
 | `/api/time` | GET/POST | Device clock |
 
 ---

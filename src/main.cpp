@@ -183,6 +183,11 @@ uint32_t timeDisplayStart = 0;          // When the current time display started
 const uint32_t TIME_DISPLAY_DURATION = 3000;  // Show time for 3 seconds
 const uint32_t TIME_TICK_INTERVAL = 60000;    // Advance clock every 60 seconds
 
+// First-boot WiFi setup screen state
+bool isShowingWiFiSetup = false;        // True during first-boot setup screen
+bool wifiSetupTouchWasActive = false;   // For detecting button taps
+bool wifiWasEnabled = true;             // Track WiFi enabled state for changes
+
 //=============================================================================
 // Micro-Expression Behavior - Random idle personality moments
 //=============================================================================
@@ -1221,7 +1226,13 @@ void setup() {
 
     // Initialize WiFi manager
     wifiManager.begin(BOOT_BUTTON_PIN);
-    if (wifiManager.hasCredentials()) {
+    wifiWasEnabled = settingsMenu.isWiFiEnabled();
+
+    // Check if WiFi is completely disabled in settings
+    if (!settingsMenu.isWiFiEnabled()) {
+        Serial.println("WiFi disabled in settings - staying offline");
+        wifiManager.disable();
+    } else if (wifiManager.hasCredentials()) {
         Serial.println("Connecting to saved WiFi...");
         wifiManager.connectToSavedWiFi();
     } else {
@@ -1230,6 +1241,12 @@ void setup() {
         // Start captive portal DNS server for automatic redirect
         captivePortal.begin(WIFI_AP_IP);
         Serial.println("Captive portal started");
+
+        // Show first-boot setup screen only if user hasn't chosen offline mode yet
+        if (!settingsMenu.isOfflineModeConfigured()) {
+            isShowingWiFiSetup = true;
+            Serial.println("First boot - showing WiFi setup screen");
+        }
     }
 
     // Start web server (works in both AP and STA mode)
@@ -1316,6 +1333,29 @@ void loop() {
         audio.setThreshold(settingsMenu.getMicThreshold() / 100.0f);
         renderer.setColor(settingsMenu.getColorRGB565());
         webServer.clearSettingsChange();
+    }
+
+    // Handle WiFi enable/disable changes from device settings menu
+    bool wifiNowEnabled = settingsMenu.isWiFiEnabled();
+    if (wifiNowEnabled != wifiWasEnabled) {
+        if (wifiNowEnabled) {
+            // WiFi was just enabled
+            Serial.println("WiFi enabled from settings");
+            wifiManager.enable();
+            // Start captive portal if in AP mode
+            if (wifiManager.isAPMode() && !captivePortal.isRunning()) {
+                captivePortal.begin(WIFI_AP_IP);
+            }
+        } else {
+            // WiFi was just disabled
+            Serial.println("WiFi disabled from settings");
+            if (captivePortal.isRunning()) {
+                captivePortal.stop();
+            }
+            wifiManager.disable();
+        }
+        wifiWasEnabled = wifiNowEnabled;
+        needFullScreenClear = true;
     }
 
     // Time tracking - advance clock every minute and trigger display
@@ -1761,10 +1801,10 @@ void loop() {
     }
 
     // Determine current render mode for full-screen clear on transitions
-    // Modes: 0=eyes, 1=menu, 2=countdown, 3=sleep, 4=timeDisplay, 5=apSetup
+    // Modes: 0=eyes, 1=menu, 2=countdown, 3=sleep, 4=timeDisplay, 5=wifiSetup
     int currentRenderMode = 0;  // Default: eyes
-    if (wifiManager.isAPMode()) {
-        currentRenderMode = 5;  // apSetup (highest priority - show WiFi setup info)
+    if (isShowingWiFiSetup) {
+        currentRenderMode = 5;  // wifiSetup (first-boot setup screen with buttons)
     } else if (sleepBehavior.isSleeping()) {
         currentRenderMode = 3;  // sleep
     } else if (settingsMenu.isOpen()) {
@@ -1798,10 +1838,36 @@ void loop() {
         lastRenderedFilledLen = -1;  // Force progress bar redraw
     }
 
-    // If in AP mode, show WiFi setup screen instead of eyes
-    if (wifiManager.isAPMode()) {
-        settingsMenu.renderWiFiSetup(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
-                                     renderer.getColor());
+    // First-boot WiFi setup screen with "Configure WiFi" and "Use Offline" buttons
+    if (isShowingWiFiSetup) {
+        // Handle touch for button selection
+        // Screen is 336x416 (buffer coords), split into two button regions
+        // Top half (y < 208): "Configure WiFi"
+        // Bottom half (y >= 208): "Use Offline"
+        if (isTouching && !wifiSetupTouchWasActive) {
+            // touchY is in screen coords (0-448), need to convert to buffer coords
+            // Buffer Y maps to screen X after 90° CCW rotation
+            // Use touchX as the effective Y position (due to rotation)
+            int16_t effectiveY = touchX;  // Screen X = Buffer Y (rotated)
+
+            if (effectiveY < COMBINED_BUF_HEIGHT / 2) {
+                // Top half - Configure WiFi
+                Serial.println("Configure WiFi selected - keeping AP mode for setup");
+                isShowingWiFiSetup = false;
+                needFullScreenClear = true;
+            } else {
+                // Bottom half - Use Offline
+                Serial.println("Use Offline selected - eyes will show, AP stays running");
+                settingsMenu.setOfflineModeConfigured(true);
+                isShowingWiFiSetup = false;
+                needFullScreenClear = true;
+            }
+        }
+        wifiSetupTouchWasActive = isTouching;
+
+        // Render first-boot setup screen
+        settingsMenu.renderFirstBootSetup(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                          renderer.getColor());
         gfx->startWrite();
         gfx->draw16bitRGBBitmap(leftEyePos.bufX, leftEyePos.bufY,
                                 eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT);

@@ -91,6 +91,35 @@ void WiFiManager::clearCredentials() {
     Serial.println("[WiFi] Credentials cleared");
 }
 
+void WiFiManager::disable() {
+    Serial.println("[WiFi] Disabling WiFi completely");
+
+    // Stop any existing connection
+    WiFi.disconnect(true);
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_OFF);
+
+    mdnsStarted = false;
+    state = WiFiState::Disabled;
+
+    Serial.println("[WiFi] Disabled");
+}
+
+void WiFiManager::enable() {
+    if (state != WiFiState::Disabled) {
+        Serial.println("[WiFi] Already enabled");
+        return;
+    }
+
+    Serial.println("[WiFi] Re-enabling WiFi");
+
+    if (hasCredentials()) {
+        connectToSavedWiFi();
+    } else {
+        startAPMode();
+    }
+}
+
 void WiFiManager::connectToSavedWiFi() {
     if (!hasCredentials()) {
         Serial.println("[WiFi] No credentials to connect with");
@@ -173,6 +202,7 @@ void WiFiManager::update() {
             break;
         }
 
+        case WiFiState::Disabled:
         case WiFiState::APMode:
         case WiFiState::Unconfigured:
         case WiFiState::ConnectionFailed:
@@ -224,6 +254,7 @@ float WiFiManager::getFactoryResetProgress() const {
 
 const char* WiFiManager::getStateString() const {
     switch (state) {
+        case WiFiState::Disabled:         return "Disabled";
         case WiFiState::Unconfigured:     return "Unconfigured";
         case WiFiState::APMode:           return "AP Mode";
         case WiFiState::Connecting:       return "Connecting";
