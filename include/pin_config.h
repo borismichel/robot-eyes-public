@@ -75,4 +75,10 @@
 #define SDMMC_CMD   1
 #define SDMMC_DATA  3
 
+// =============================================================================
+// Hardware Buttons (BOOT button on ESP32-S3)
+// Factory reset: Hold BOOT button for 5 seconds
+// =============================================================================
+#define BOOT_BUTTON_PIN  0   // GPIO0 (BOOT button)
+
 #endif // PIN_CONFIG_H

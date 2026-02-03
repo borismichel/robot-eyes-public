@@ -20,6 +20,9 @@
 #include "audio/audio_player.h"
 #include "ui/settings_menu.h"
 #include "ui/pomodoro.h"
+#include "network/wifi_manager.h"
+#include "network/web_server.h"
+#include "network/captive_portal.h"
 
 #define SCREEN_WIDTH  368
 #define SCREEN_HEIGHT 448
@@ -67,6 +70,9 @@ SleepBehavior sleepBehavior;
 AudioPlayer audioPlayer;
 SettingsMenu settingsMenu;
 PomodoroTimer pomodoroTimer;
+WiFiManager wifiManager;
+WebServerManager webServer;
+CaptivePortal captivePortal;
 
 // Current expression
 Expression currentExpression = Expression::Neutral;
@@ -305,6 +311,14 @@ void setExpression(Expression expr) {
 void nextExpression() {
     int next = ((int)currentExpression + 1) % (int)Expression::COUNT;
     setExpression((Expression)next);
+}
+
+// Web expression preview callback
+void onWebExpressionPreview(int index) {
+    if (index >= 0 && index < (int)Expression::COUNT) {
+        setExpression((Expression)index);
+        Serial.printf("Web expression preview: %s\n", getExpressionName((Expression)index));
+    }
 }
 
 TouchGesture detectGesture() {
@@ -1205,6 +1219,23 @@ void setup() {
 
     Serial.println("2-finger tap to open settings menu");
 
+    // Initialize WiFi manager
+    wifiManager.begin(BOOT_BUTTON_PIN);
+    if (wifiManager.hasCredentials()) {
+        Serial.println("Connecting to saved WiFi...");
+        wifiManager.connectToSavedWiFi();
+    } else {
+        Serial.println("No WiFi credentials - starting AP mode");
+        wifiManager.startAPMode();
+        // Start captive portal DNS server for automatic redirect
+        captivePortal.begin(WIFI_AP_IP);
+        Serial.println("Captive portal started");
+    }
+
+    // Start web server (works in both AP and STA mode)
+    webServer.begin(&settingsMenu, &pomodoroTimer, &wifiManager);
+    webServer.setExpressionCallback(onWebExpressionPreview);
+
     // Initialize gaze tweeners
     gazeX.setSmoothTime(0.15f);
     gazeY.setSmoothTime(0.15f);
@@ -1259,6 +1290,33 @@ void loop() {
     // Target 30fps
     if (deltaTime < 0.033f) return;
     lastFrameTime = now;
+
+    // Update WiFi state machine (handles connection, reconnection, factory reset)
+    wifiManager.update();
+
+    // Update captive portal DNS server (only when in AP mode)
+    if (wifiManager.isAPMode()) {
+        if (!captivePortal.isRunning()) {
+            // Start captive portal when entering AP mode (e.g., after connection failure)
+            captivePortal.begin(WIFI_AP_IP);
+            Serial.println("Captive portal started");
+        }
+        captivePortal.update();
+    } else if (captivePortal.isRunning()) {
+        // Stop captive portal when leaving AP mode
+        captivePortal.stop();
+        Serial.println("Captive portal stopped");
+    }
+
+    // Apply settings changes from web interface
+    if (webServer.hasSettingsChange()) {
+        audioPlayer.setVolume(settingsMenu.getVolume());
+        gfx->setBrightness((settingsMenu.getBrightness() * 255) / 100);
+        audioPlayer.setMicGain(settingsMenu.getMicSensitivity());
+        audio.setThreshold(settingsMenu.getMicThreshold() / 100.0f);
+        renderer.setColor(settingsMenu.getColorRGB565());
+        webServer.clearSettingsChange();
+    }
 
     // Time tracking - advance clock every minute and trigger display
     if (now - lastTimeTick >= TIME_TICK_INTERVAL) {
@@ -1703,9 +1761,11 @@ void loop() {
     }
 
     // Determine current render mode for full-screen clear on transitions
-    // Modes: 0=eyes, 1=menu, 2=countdown, 3=sleep, 4=timeDisplay
+    // Modes: 0=eyes, 1=menu, 2=countdown, 3=sleep, 4=timeDisplay, 5=apSetup
     int currentRenderMode = 0;  // Default: eyes
-    if (sleepBehavior.isSleeping()) {
+    if (wifiManager.isAPMode()) {
+        currentRenderMode = 5;  // apSetup (highest priority - show WiFi setup info)
+    } else if (sleepBehavior.isSleeping()) {
         currentRenderMode = 3;  // sleep
     } else if (settingsMenu.isOpen()) {
         currentRenderMode = 1;  // menu
@@ -1736,6 +1796,17 @@ void loop() {
         prevRightRect.valid = false;
         prevFrameWasMenu = false;
         lastRenderedFilledLen = -1;  // Force progress bar redraw
+    }
+
+    // If in AP mode, show WiFi setup screen instead of eyes
+    if (wifiManager.isAPMode()) {
+        settingsMenu.renderWiFiSetup(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                     renderer.getColor());
+        gfx->startWrite();
+        gfx->draw16bitRGBBitmap(leftEyePos.bufX, leftEyePos.bufY,
+                                eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT);
+        gfx->endWrite();
+        return;
     }
 
     // If sleeping, render breathing bars and skip normal eye rendering

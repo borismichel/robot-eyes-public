@@ -98,6 +98,12 @@ public:
     bool is24HourFormat() const { return is24Hour; }
 
     /**
+     * @brief Get settings version (increments on any change)
+     * Used for detecting changes from web interface
+     */
+    uint32_t getSettingsVersion() const { return settingsVersion; }
+
+    /**
      * @brief Render only the time display (for periodic display)
      * @param color RGB565 color for the digits (use eye color)
      * @param showColon Whether to draw the colon (for blinking effect)
@@ -117,6 +123,13 @@ public:
                          const char* label = nullptr);
 
     /**
+     * @brief Render WiFi setup screen for AP mode
+     * Displays SSID, password, and IP address for initial configuration
+     * @param color RGB565 color for the text
+     */
+    void renderWiFiSetup(uint16_t* buffer, int16_t bufWidth, int16_t bufHeight, uint16_t color);
+
+    /**
      * @brief Advance time by specified minutes (for clock tick)
      */
     void tickMinute() { addMinutes(1); }
@@ -127,6 +140,13 @@ public:
     void setMicSensitivity(int val);
     void setMicThreshold(int val);
 
+    // Time setters (for web interface)
+    void setTime(int hour, int minute);
+    void setTimeFormat(bool use24Hour);
+
+    // Color setter (for web interface)
+    void setColorIndex(int index);
+
 private:
     bool menuOpen;
     int currentPage;        // 0-8
@@ -136,6 +156,7 @@ private:
     int timeHour;           // 0-23
     int timeMinute;         // 0-59
     bool is24Hour;          // True for 24-hour format
+    uint32_t settingsVersion;  // Increments on any change (for web sync)
     Preferences prefs;
 
     // Pomodoro sub-menu state

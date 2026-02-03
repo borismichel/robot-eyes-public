@@ -238,3 +238,95 @@ Applied in main.cpp via:
 idleBehavior.setMoodModifiers(moodMods.blinkRateMultiplier, moodMods.gazeSpeedMultiplier);
 leftEye.topLid += moodMods.baseLidOffset;
 ```
+
+---
+
+## WiFi & Web Server
+
+Network module in `src/network/`:
+
+### WiFi State Machine (wifi_manager.h)
+
+```cpp
+enum class WiFiState {
+    Unconfigured,       // No saved credentials - start AP mode
+    APMode,             // Running as access point for setup
+    Connecting,         // Attempting to connect to saved network
+    Connected,          // Successfully connected
+    ConnectionFailed    // Failed, falling back to AP mode
+};
+```
+
+**AP Mode Configuration:**
+- SSID: `DeskBuddy-Setup`
+- Password: `deskbuddy`
+- IP: `192.168.4.1`
+- Connect timeout: 15 seconds
+
+**Factory Reset:**
+- Hold BOOT button for 5+ seconds
+- Clears saved credentials
+- Device restarts in AP mode
+
+### Web Server (web_server.h)
+
+Uses ESP-IDF native `esp_http_server` for Arduino ESP32 3.x compatibility.
+
+**Key Endpoints:**
+```cpp
+GET  /                  // Main web UI
+GET  /api/settings      // All settings JSON
+POST /api/settings      // Update settings (volume, brightness, micGain, micThreshold, eyeColorIndex, workMinutes, shortBreakMinutes, longBreakMinutes, sessionsBeforeLongBreak, tickingEnabled)
+GET  /api/status        // Status JSON (wifi, pomodoro, time, uptimeSeconds)
+POST /api/expression    // Preview expression (index: 0-29)
+POST /api/pomodoro/start
+POST /api/pomodoro/stop
+GET  /api/wifi/scan     // Returns array of {ssid, rssi, secure}
+POST /api/wifi/connect  // {ssid, password}
+POST /api/wifi/forget   // Clears credentials
+```
+
+**Settings Change Detection:**
+```cpp
+// In main.cpp loop:
+if (webServer.hasSettingsChange()) {
+    audioPlayer.setVolume(settingsMenu.getVolume());
+    gfx->setBrightness((settingsMenu.getBrightness() * 255) / 100);
+    audioPlayer.setMicGain(settingsMenu.getMicSensitivity());
+    audio.setThreshold(settingsMenu.getMicThreshold() / 100.0f);
+    renderer.setColor(settingsMenu.getColorRGB565());
+    webServer.clearSettingsChange();
+}
+```
+
+**Expression Preview Callback:**
+```cpp
+void onWebExpressionPreview(int index) {
+    if (index >= 0 && index < (int)Expression::COUNT) {
+        setExpression((Expression)index);
+    }
+}
+webServer.setExpressionCallback(onWebExpressionPreview);
+```
+
+### Web UI Design
+
+- Dark theme: background `#0A0A0A`, foreground `#F2F2F2`, accent `#DFFF00` (neon yellow)
+- Fonts: JetBrains Mono (labels), Inter (body)
+- Tabbed navigation: Dashboard, Display, Audio, Time, WiFi, Pomodoro, Expressions
+- Settings sync via polling `/api/status` every 1 second
+- Color picker: 8 presets matching device `COLOR_PRESETS` array order
+
+**Eye Color Order (must match device):**
+```cpp
+const EYE_COLORS = [
+    { name: 'Cyan', hex: '#00FFFF' },
+    { name: 'Pink', hex: '#FF00FF' },
+    { name: 'Green', hex: '#00FF00' },
+    { name: 'Orange', hex: '#FFA500' },
+    { name: 'Purple', hex: '#8000FF' },
+    { name: 'White', hex: '#FFFFFF' },
+    { name: 'Red', hex: '#FF0000' },
+    { name: 'Blue', hex: '#0000FF' }
+];
+```

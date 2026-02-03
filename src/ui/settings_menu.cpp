@@ -105,6 +105,7 @@ SettingsMenu::SettingsMenu()
     , timeHour(12)
     , timeMinute(0)
     , is24Hour(false)
+    , settingsVersion(0)
     , pomoSubMenuOpen(false)
     , pomoSubPage(0)
     , settingsSubMenuOpen(false)
@@ -396,8 +397,9 @@ void SettingsMenu::saveSettings() {
     prefs.putInt("colorIdx", colorIndex);
     prefs.putBool("is24Hour", is24Hour);
     prefs.end();
-    Serial.printf("Settings saved: Vol=%d, Brt=%d, MicGain=%d, MicThr=%d, Color=%s, Format=%s\n",
-                  values[0], values[1], values[2], values[3],
+    settingsVersion++;  // Increment version for web sync detection
+    Serial.printf("Settings saved (v%u): Vol=%d, Brt=%d, MicGain=%d, MicThr=%d, Color=%s, Format=%s\n",
+                  settingsVersion, values[0], values[1], values[2], values[3],
                   COLOR_PRESET_NAMES[colorIndex], is24Hour ? "24H" : "12H");
 }
 
@@ -432,6 +434,22 @@ void SettingsMenu::setMicSensitivity(int val) {
 
 void SettingsMenu::setMicThreshold(int val) {
     values[3] = constrain(val, 0, 100);
+    saveSettings();
+}
+
+void SettingsMenu::setTime(int hour, int minute) {
+    timeHour = constrain(hour, 0, 23);
+    timeMinute = constrain(minute, 0, 59);
+    saveSettings();
+}
+
+void SettingsMenu::setTimeFormat(bool use24Hour) {
+    is24Hour = use24Hour;
+    saveSettings();
+}
+
+void SettingsMenu::setColorIndex(int index) {
+    colorIndex = constrain(index, 0, NUM_COLOR_PRESETS - 1);
     saveSettings();
 }
 
@@ -1180,5 +1198,41 @@ void SettingsMenu::renderCountdown(uint16_t* buffer, int16_t bufWidth, int16_t b
 
     // Second ones
     drawLargeDigit(buffer, bufWidth, bufHeight, xPos, digitY, d3, color, digitScale);
+}
+
+void SettingsMenu::renderWiFiSetup(uint16_t* buffer, int16_t bufWidth, int16_t bufHeight, uint16_t color) {
+    // Clear buffer to black
+    for (int i = 0; i < bufWidth * bufHeight; i++) {
+        buffer[i] = BG_COLOR;
+    }
+
+    // Display WiFi setup information
+    // Title at top
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, 40, "WIFI SETUP", color);
+
+    // Connection instructions
+    int16_t y = 120;
+    const int lineSpacing = 45;
+
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "CONNECT TO", TEXT_COLOR);
+    y += lineSpacing;
+
+    // SSID (larger, in accent color)
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "DESKBUDDY-SETUP", color);
+    y += lineSpacing + 15;
+
+    // Password label
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "PASSWORD", TEXT_COLOR);
+    y += lineSpacing;
+
+    // Password value
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "DESKBUDDY", color);
+    y += lineSpacing + 15;
+
+    // IP address info
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "THEN OPEN", TEXT_COLOR);
+    y += lineSpacing;
+
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "192.168.4.1", color);
 }
 

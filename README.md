@@ -32,6 +32,15 @@ This project implements a parametric eye animation system that creates lifelike,
 - **Audio feedback**: MP3 sounds for happy (when petted), confused (when shaken), yawn, and timer ticks
 - **Settings menu**: 2-finger tap opens swipeable settings (pomodoro, volume, brightness, mic, color, time)
 
+### WiFi & Web Interface
+- **Access Point mode**: First-boot setup via captive portal (SSID: `DeskBuddy-Setup`)
+- **Station mode**: Connects to saved WiFi network with auto-reconnect
+- **mDNS**: Access via `http://deskbuddy.local` when connected
+- **Web dashboard**: Remote control with tabbed interface (Dashboard, Display, Audio, Time, WiFi, Pomodoro, Expressions)
+- **Real-time sync**: Settings changes sync between device and web UI
+- **Expression preview**: Click any of 30 expressions to preview on device
+- **Factory reset**: Hold BOOT button for 5 seconds to clear WiFi credentials
+
 ### Technical Features
 - 30fps rendering using software per-pixel evaluation
 - Parametric shape system with 17 adjustable parameters per eye
@@ -79,6 +88,10 @@ robot-eyes/
 │   ├── ui/
 │   │   ├── settings_menu.*   # Swipeable settings with sub-menus
 │   │   └── pomodoro.*        # Pomodoro timer state machine
+│   ├── network/
+│   │   ├── wifi_manager.*    # WiFi AP/STA mode state machine
+│   │   ├── web_server.*      # HTTP server with REST API
+│   │   └── captive_portal.*  # DNS redirect for AP mode setup
 │   └── animation/
 │       └── tweener.*         # Smooth value transitions
 ├── data/                     # LittleFS audio files
@@ -207,6 +220,92 @@ Focus timer using the classic Pomodoro Technique:
 - Tap during countdown: No effect (prevents accidental stops)
 - Long-hold or open menu: Exit pomodoro mode
 - Tap when "WAITING": Start next phase
+
+### WiFi Setup
+
+**First Boot (No saved credentials):**
+1. Device starts in Access Point mode
+2. Connect to WiFi network: `DeskBuddy-Setup` (password: `deskbuddy`)
+3. Open browser - captive portal redirects to setup page
+4. Or navigate to `http://192.168.4.1`
+5. Select your WiFi network and enter password
+6. Device saves credentials and reboots
+
+**Normal Operation:**
+- Device connects to saved WiFi automatically
+- Access web interface at `http://deskbuddy.local` (mDNS)
+- Or use the IP address shown on first connection
+
+**Factory Reset:**
+- Hold BOOT button for 5+ seconds
+- WiFi credentials are cleared
+- Device restarts in AP mode
+
+### Web Interface
+
+Access via `http://deskbuddy.local` or device IP address.
+
+**Dashboard Tab:**
+| Card | Description |
+|------|-------------|
+| Status | Online/Offline indicator |
+| WiFi | Connected network name |
+| IP Address | Current device IP |
+| Pomodoro | Timer state (Idle/Working/Break) |
+| Current Time | Device clock |
+| Uptime | Time since last reboot |
+
+Quick settings for Volume and Brightness with live sliders.
+
+**Display Tab:**
+- Brightness slider (0-100%)
+- Eye color picker (8 preset colors: Cyan, Pink, Green, Orange, Purple, White, Red, Blue)
+
+**Audio Tab:**
+- Volume slider (0-100%)
+- Microphone gain slider
+- Mic threshold slider
+
+**Time Tab:**
+- Hour/minute dropdowns to set device clock
+- 12H/24H format toggle
+
+**WiFi Tab:**
+- Current connection status and signal strength
+- Scan for available networks
+- Connect to new network
+- Forget saved credentials (returns to AP mode)
+
+**Pomodoro Tab:**
+- Start/Stop timer controls
+- Work duration slider (1-60 min)
+- Short break slider (1-30 min)
+- Long break slider (5-60 min)
+- Sessions before long break (1-8)
+- Ticking sound toggle
+
+**Expressions Tab:**
+- Grid of 30 expression buttons
+- Click to preview expression on device in real-time
+
+### Web API
+
+REST endpoints for programmatic control:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Web interface HTML |
+| `/api/settings` | GET | All settings as JSON |
+| `/api/settings` | POST | Update settings |
+| `/api/status` | GET | Device status (WiFi, pomodoro, time, uptime) |
+| `/api/time` | GET | Current time |
+| `/api/time` | POST | Set time (hour, minute, is24Hour) |
+| `/api/wifi/scan` | GET | Scan available networks |
+| `/api/wifi/connect` | POST | Connect to network (ssid, password) |
+| `/api/wifi/forget` | POST | Clear saved credentials |
+| `/api/pomodoro/start` | POST | Start pomodoro timer |
+| `/api/pomodoro/stop` | POST | Stop pomodoro timer |
+| `/api/expression` | POST | Preview expression (index: 0-29) |
 
 ### Time-of-Day Mood
 
