@@ -1305,8 +1305,10 @@ String WebServerManager::generateSettingsPage() {
 
             <div class="card">
                 <div class="card-title">Danger Zone</div>
-                <button class="btn btn-danger" onclick="forgetWiFi()">Forget Network</button>
-                <button class="btn btn-danger" onclick="disableWiFi()" style="margin-left: 8px;">Disable WiFi</button>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-danger" style="flex: 1 1 0; min-width: 0;" onclick="forgetWiFi()">Forget Network</button>
+                    <button class="btn btn-danger" style="flex: 1 1 0; min-width: 0; margin-top: 0;" onclick="disableWiFi()">Disable WiFi</button>
+                </div>
                 <p style="margin-top: 12px; font-size: 12px; color: #888;">Disabling WiFi will disconnect this page. Use device settings to re-enable.</p>
             </div>
         </section>
