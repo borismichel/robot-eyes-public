@@ -1416,7 +1416,7 @@ void loop() {
                 showingJoy = true;         // Enable bounce animation
                 joyBouncePhase = 0.0f;     // Reset bounce phase
                 joyStart = now;            // Set start time for duration tracking
-                audioPlayer.play("/complete.mp3");
+                audioPlayer.play("/joy.mp3");
                 Serial.println("Pomodoro: Work complete - Joy celebration with bounce!");
             } else {
                 // Break complete - just Content with bounce animation
