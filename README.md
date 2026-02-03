@@ -1,118 +1,68 @@
-# Robo Eyes
+# DeskBuddy
 
 Expressive robot eyes for ESP32-S3 with AMOLED display, inspired by Anki's Cozmo robot.
 
-## Overview
-
-This project implements a parametric eye animation system that creates lifelike, expressive robot eyes. The eyes respond to touch, motion (IMU), and can express a wide range of emotions through smooth animations.
-
 **Target Hardware:** [Waveshare ESP32-S3-Touch-AMOLED-1.8](https://www.waveshare.com/esp32-s3-touch-amoled-1.8.htm)
+
+---
 
 ## Features
 
-### Expressions
-- **30 emotion presets** with smooth transitions between any states
-- **Core expressions**: Neutral, Happy, Sad, Surprised, Angry, Suspicious, Sleepy, Scared, Content, Startled, Grumpy, Joyful, Focused, Confused, Yawn, ContentPetting
-- **Special shapes**: Dazed (swirl), Dizzy (star), Love (heart), Joy (curved crescents)
-- **Micro-expressions**: Curious, Thinking, Mischievous, Bored, Alert
-- **Curve/stretch expressions**: Smug, Dreamy, Skeptical, Squint, Wink
-- **Asymmetric expressions** for added personality (Suspicious, Confused, Wink, Mischievous)
-- **Variable transition timing**: Fast reactions for surprise/startle (0.08s), slow transitions for sleepy/dreamy (0.35s)
+### Expressions & Animation
+- **30 emotion presets** with smooth transitions (0.08s-0.35s)
+- **Core**: Neutral, Happy, Sad, Surprised, Angry, Sleepy, Scared, Confused, Focused, Joyful
+- **Special shapes**: Heart (Love), Star (Dizzy), Spiral (Dazed), Crescents (Joy)
+- **Personality**: Curious, Thinking, Mischievous, Bored, Smug, Dreamy, Skeptical
+- **Asymmetric**: Suspicious, Confused, Wink for added character
+- **Idle behavior**: Random gaze scanning, micro-movements, natural blinking
 
-### Behaviors
-- **Idle animations**: Random gaze scanning, micro-movements, natural blinking (6-10 blinks/min)
-- **Touch response**: Tap to cycle expressions, hold 2+ seconds to "pet" the robot
-- **Motion response**: Scared when picked up, Confused when shaken
-- **Gravity-aware gaze**: Eyes drift toward gravity direction when device is tilted
-- **Orientation expressions**: Face-down triggers hiding/shy, prolonged tilt (>5s) triggers uncomfortable squint
-- **Sound response**: Shows irritated expression when environment gets too loud
-- **Time-of-day mood**: Personality shifts based on internal clock (energetic mornings, relaxed evenings, sleepy nights)
-- **Sleep cycle**: Drowsy → yawn → sleep with breathing animation after 30 minutes of inactivity
-- **Pomodoro timer**: Focus timer with work/break cycles and visual progress bar around screen
-- **Audio feedback**: MP3 sounds for happy (when petted), confused (when shaken), yawn, and timer ticks
-- **Settings menu**: 2-finger tap opens swipeable settings (pomodoro, volume, brightness, mic, color, time)
+### Interaction
+| Input | Response |
+|-------|----------|
+| Tap | Cycle expressions |
+| Hold 2s | "Petting" mode (happy + sound) |
+| 2-finger tap | Open settings menu |
+| Pick up | Scared expression |
+| Shake | Confused + sound |
+| Tilt | Eyes drift toward gravity |
+| Face down | Hiding/shy expression |
+| Loud noise | Grumpy/irritated |
 
-### WiFi & Web Interface
-- **Access Point mode**: First-boot setup via captive portal (SSID: `DeskBuddy-Setup`)
-- **Station mode**: Connects to saved WiFi network with auto-reconnect
-- **mDNS**: Access via `http://deskbuddy.local` when connected
-- **Web dashboard**: Remote control with tabbed interface (Dashboard, Display, Audio, Time, WiFi, Pomodoro, Expressions)
-- **Real-time sync**: Settings changes sync between device and web UI
-- **Expression preview**: Click any of 30 expressions to preview on device
-- **Factory reset**: Hold BOOT button for 5 seconds to clear WiFi credentials
+### Time & Mood
+- **Internal clock** with 12H/24H format
+- **Mood shifts** based on time of day:
+  - Morning (6am-12pm): Energetic, faster blinks
+  - Afternoon: Balanced baseline
+  - Evening (6pm-10pm): Relaxed, slower movements
+  - Night (10pm-6am): Sleepy, heavy lids
+- **Sleep cycle**: After 30 min inactivity → yawn → drowsy → sleep with breathing animation
 
-### Technical Features
-- 30fps rendering using software per-pixel evaluation
-- Parametric shape system with 17 adjustable parameters per eye
-- Smooth interpolation with expression-specific timing (0.08s-0.35s)
-- Simple amplitude-based sound detection
-- Special shape rendering: stars, hearts, spirals
-- Dual-core processing (display on Core 1, audio on Core 0)
-- RGB565 framebuffer rendering (336×416 buffer, positioned inside 16px progress bar margins)
-- **PSRAM optimizations**:
-  - Dirty-rect clearing: Only clears previous eye bounding boxes (~24KB vs 280KB full buffer)
-  - Partial screen blit: Only pushes changed regions to display
-  - Shape-aware bounds: Computes correct dirty rects for stars, hearts, swirls, circles
-  - Full blit on state transitions (menu close, sleep wake)
-- **Pomodoro progress bar**: 16px thick frame with 42px corner radius, depletes clockwise
+### Pomodoro Timer
+- Classic technique: Work → Short Break → repeat → Long Break
+- **Visual**: Large countdown + 16px progress bar frame (depletes clockwise)
+- **Audio**: Optional tick sound in last 60 seconds
+- **Configurable**: Work (1-60 min), breaks (1-60 min), sessions (1-8)
 
-## Hardware Requirements
+### WiFi & Remote Control
+- **Setup**: Connect to `DeskBuddy-Setup` AP, configure via captive portal
+- **Access**: `http://deskbuddy.local` or device IP
+- **Web UI tabs**: Dashboard, Display, Audio, Time, WiFi, Pomodoro, Expressions
+- **Dashboard**: Status, WiFi, IP, Pomodoro state, Time, Uptime
+- **Expression preview**: Click any of 30 expressions to preview live
+- **Factory reset**: Hold BOOT button 5+ seconds
 
-- Waveshare ESP32-S3-Touch-AMOLED-1.8 development board
-  - 368x448 AMOLED display
-  - Capacitive touch
-  - QMI8658 6-axis IMU
-  - ES8311 audio codec with speaker
+---
+
+## Getting Started
+
+### Hardware
+- Waveshare ESP32-S3-Touch-AMOLED-1.8
+  - 368×448 AMOLED display
+  - Capacitive touch + QMI8658 IMU
+  - ES8311 audio codec + speaker
   - 16MB Flash, 8MB PSRAM
 
-## Project Structure
-
-```
-robot-eyes/
-├── src/
-│   ├── main.cpp              # Main application loop
-│   ├── eyes/
-│   │   ├── eye_shape.h       # Parametric eye shape definition
-│   │   ├── eye_renderer.h    # Software renderer interface
-│   │   └── eye_renderer.cpp  # Per-pixel rendering implementation
-│   ├── behavior/
-│   │   ├── expressions.h     # Expression presets (30 emotions)
-│   │   ├── idle_behavior.*   # Gaze scanning, blinking, yawn
-│   │   ├── sleep_behavior.*  # Drowsy/sleep state machine
-│   │   └── time_mood.h       # Time-of-day mood modifiers
-│   ├── input/
-│   │   ├── imu_handler.*     # Motion/tilt detection, gravity gaze
-│   │   └── audio_handler.*   # Microphone level detection
-│   ├── audio/
-│   │   └── audio_player.*    # MP3 playback via ES8311
-│   ├── ui/
-│   │   ├── settings_menu.*   # Swipeable settings with sub-menus
-│   │   └── pomodoro.*        # Pomodoro timer state machine
-│   ├── network/
-│   │   ├── wifi_manager.*    # WiFi AP/STA mode state machine
-│   │   ├── web_server.*      # HTTP server with REST API
-│   │   └── captive_portal.*  # DNS redirect for AP mode setup
-│   └── animation/
-│       └── tweener.*         # Smooth value transitions
-├── data/                     # LittleFS audio files
-│   ├── happy.mp3
-│   ├── confused.mp3
-│   ├── yawn.mp3
-│   └── tick.mp3              # Pomodoro countdown tick
-├── lib/                      # Waveshare GFX library
-├── include/
-│   └── lv_conf.h            # LVGL configuration
-└── platformio.ini           # Build configuration
-```
-
-## Building and Flashing
-
-### Prerequisites
-- [PlatformIO](https://platformio.org/) (VS Code extension or CLI)
-- USB-C cable
-
-### Build Commands
-
+### Build & Flash
 ```bash
 # Build firmware
 pio run
@@ -120,278 +70,133 @@ pio run
 # Upload firmware
 pio run -t upload
 
-# Upload audio files (required for sounds)
+# Upload audio files (required)
 pio run -t uploadfs
 
-# Monitor serial output
+# Monitor serial
 pio device monitor
 ```
 
+### WiFi Setup
+1. On first boot, connect to WiFi `DeskBuddy-Setup` (password: `deskbuddy`)
+2. Browser opens setup page (or go to `http://192.168.4.1`)
+3. Select your network and enter password
+4. Device reboots and connects automatically
+5. Access web UI at `http://deskbuddy.local`
+
+---
+
 ## Usage
 
-### Touch Gestures
-| Gesture | Action |
-|---------|--------|
-| Tap | Cycle through expressions |
-| Hold 2+ seconds | Enter "petting" mode (happy expression + sound) |
-| Release | Return to previous expression |
-| 2-finger tap | Open settings menu (swipe up/down to navigate pages) |
+### On-Device Settings
+Open with 2-finger tap, swipe up/down to navigate:
 
-### Motion Triggers
-| Motion | Response |
-|--------|----------|
-| Pick up | Scared expression |
-| Shake | Confused expression + sound |
-| Tilt device | Eyes drift toward gravity direction |
-| Face-down | Hiding/shy expression (heavy lids) |
-| Tilted >45° for 5s | Uncomfortable squint expression |
+**Main Menu** → Pomodoro | Settings | Exit
 
-### Sound Response
-| Trigger | Response |
-|---------|----------|
-| Too loud | Grumpy/irritated expression for 3 seconds |
+**Pomodoro**: Start/Stop, Work duration, Short break, Long break, Sessions, Ticking, Back
 
-### Sleep Cycle
-After 30 minutes of no interaction:
-1. Yawn expression with sound
-2. Transition to drowsy (heavy lids)
-3. Fall asleep (breathing bar animation)
-
-Wake triggers: Touch, shake, or pick up
-
-### Settings Menu
-
-Open with 2-finger tap. Swipe up/down to navigate between main menu pages:
-
-**Main Menu:**
-| Page | Entry | Action |
-|------|-------|--------|
-| 1 | Pomodoro | Tap to open pomodoro sub-menu |
-| 2 | Settings | Tap to open settings sub-menu |
-| 3 | Exit | Tap to close menu |
-
-**Pomodoro Sub-Menu:**
-| Page | Setting | Control |
-|------|---------|---------|
-| 1 | Start/Stop | Tap to start work session or stop timer |
-| 2 | Work Duration | Horizontal slider (1-60 min, default 25) |
-| 3 | Short Break | Horizontal slider (1-30 min, default 5) |
-| 4 | Long Break | Horizontal slider (1-60 min, default 15) |
-| 5 | Sessions | Horizontal slider (1-8, default 4 before long break) |
-| 6 | Ticking | Tap to toggle tick sound in last 60 seconds |
-| 7 | Back | Tap to return to main menu |
-
-**Settings Sub-Menu:**
-| Page | Setting | Control |
-|------|---------|---------|
-| 1 | Volume | Horizontal slider (0-100%) |
-| 2 | Brightness | Horizontal slider (0-100%) |
-| 3 | Mic Gain | Horizontal slider with 0dB center marker |
-| 4 | Mic Threshold | Horizontal slider with live level meter |
-| 5 | Eye Color | Swipe left/right to cycle 8 color presets |
-| 6 | Time | Tap to set hours/minutes for internal clock |
-| 7 | Time Format | Tap to toggle 12H/24H format |
-| 8 | Back | Tap to return to main menu |
-
-All settings are persisted to flash memory.
-
-### Pomodoro Timer
-
-Focus timer using the classic Pomodoro Technique:
-
-**Work Cycle:**
-1. Work session (default 25 minutes) with focused expression
-2. Short break (default 5 minutes) with relaxed expression
-3. Repeat for 4 work sessions
-4. Long break (default 15 minutes) after completing 4 sessions
-
-**Visual Feedback:**
-- Large MM:SS countdown display in center of screen
-- 16px progress bar frame around entire screen edge (depletes clockwise)
-- Progress bar corners deplete progressively (no flashing)
-- Label above timer shows current phase (WORK, SHORT BRK, LONG BRK)
-- Celebration expression + animation between phases
-
-**Ticking:**
-- Optional tick sound plays in the last 60 seconds of each session
-- Can be toggled on/off in settings
-
-**Controls:**
-- Tap during countdown: No effect (prevents accidental stops)
-- Long-hold or open menu: Exit pomodoro mode
-- Tap when "WAITING": Start next phase
-
-### WiFi Setup
-
-**First Boot (No saved credentials):**
-1. Device starts in Access Point mode
-2. Connect to WiFi network: `DeskBuddy-Setup` (password: `deskbuddy`)
-3. Open browser - captive portal redirects to setup page
-4. Or navigate to `http://192.168.4.1`
-5. Select your WiFi network and enter password
-6. Device saves credentials and reboots
-
-**Normal Operation:**
-- Device connects to saved WiFi automatically
-- Access web interface at `http://deskbuddy.local` (mDNS)
-- Or use the IP address shown on first connection
-
-**Factory Reset:**
-- Hold BOOT button for 5+ seconds
-- WiFi credentials are cleared
-- Device restarts in AP mode
+**Settings**: Volume, Brightness, Mic Gain, Mic Threshold, Eye Color (8 presets), Time, Time Format, Back
 
 ### Web Interface
 
-Access via `http://deskbuddy.local` or device IP address.
+| Tab | Controls |
+|-----|----------|
+| Dashboard | Status cards, quick volume/brightness sliders |
+| Display | Brightness, eye color picker |
+| Audio | Volume, mic gain, mic threshold |
+| Time | Hour/minute, 12H/24H toggle |
+| WiFi | Status, scan networks, connect, forget |
+| Pomodoro | Start/stop, all duration settings |
+| Expressions | Grid of 30 buttons for live preview |
 
-**Dashboard Tab:**
-| Card | Description |
-|------|-------------|
-| Status | Online/Offline indicator |
-| WiFi | Connected network name |
-| IP Address | Current device IP |
-| Pomodoro | Timer state (Idle/Working/Break) |
-| Current Time | Device clock |
-| Uptime | Time since last reboot |
-
-Quick settings for Volume and Brightness with live sliders.
-
-**Display Tab:**
-- Brightness slider (0-100%)
-- Eye color picker (8 preset colors: Cyan, Pink, Green, Orange, Purple, White, Red, Blue)
-
-**Audio Tab:**
-- Volume slider (0-100%)
-- Microphone gain slider
-- Mic threshold slider
-
-**Time Tab:**
-- Hour/minute dropdowns to set device clock
-- 12H/24H format toggle
-
-**WiFi Tab:**
-- Current connection status and signal strength
-- Scan for available networks
-- Connect to new network
-- Forget saved credentials (returns to AP mode)
-
-**Pomodoro Tab:**
-- Start/Stop timer controls
-- Work duration slider (1-60 min)
-- Short break slider (1-30 min)
-- Long break slider (5-60 min)
-- Sessions before long break (1-8)
-- Ticking sound toggle
-
-**Expressions Tab:**
-- Grid of 30 expression buttons
-- Click to preview expression on device in real-time
-
-### Web API
-
-REST endpoints for programmatic control:
+### REST API
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/` | GET | Web interface HTML |
-| `/api/settings` | GET | All settings as JSON |
-| `/api/settings` | POST | Update settings |
-| `/api/status` | GET | Device status (WiFi, pomodoro, time, uptime) |
-| `/api/time` | GET | Current time |
-| `/api/time` | POST | Set time (hour, minute, is24Hour) |
-| `/api/wifi/scan` | GET | Scan available networks |
-| `/api/wifi/connect` | POST | Connect to network (ssid, password) |
-| `/api/wifi/forget` | POST | Clear saved credentials |
-| `/api/pomodoro/start` | POST | Start pomodoro timer |
-| `/api/pomodoro/stop` | POST | Stop pomodoro timer |
+| `/api/status` | GET | WiFi, pomodoro, time, uptime |
+| `/api/settings` | GET/POST | All device settings |
 | `/api/expression` | POST | Preview expression (index: 0-29) |
+| `/api/pomodoro/start` | POST | Start timer |
+| `/api/pomodoro/stop` | POST | Stop timer |
+| `/api/wifi/scan` | GET | Available networks |
+| `/api/wifi/connect` | POST | Connect (ssid, password) |
+| `/api/wifi/forget` | POST | Clear credentials |
+| `/api/time` | GET/POST | Device clock |
 
-### Time-of-Day Mood
+---
 
-The internal clock (set via Settings > Time) influences the robot's personality:
+## Project Structure
 
-| Period | Hours | Mood | Effects |
-|--------|-------|------|---------|
-| Morning | 6am-12pm | Energetic | Faster blinks (1.2x), faster gaze (1.1x), wide-awake eyes |
-| Afternoon | 12pm-6pm | Balanced | Normal baseline behavior |
-| Evening | 6pm-10pm | Relaxed | Slower blinks (0.85x), slower gaze (0.8x), slightly heavier lids |
-| Night | 10pm-6am | Sleepy | Slow blinks (0.7x), very slow gaze (0.6x), heavy droopy lids |
+```
+src/
+├── main.cpp                 # Application loop
+├── eyes/                    # Parametric eye rendering
+├── behavior/                # Expressions, idle, sleep, mood
+├── input/                   # IMU and audio handlers
+├── audio/                   # MP3 playback
+├── ui/                      # Settings menu, pomodoro
+├── network/                 # WiFi, web server, captive portal
+└── animation/               # Tweening utilities
 
-The mood smoothly affects:
-- Blink frequency (morning blinks more often, night less)
-- Gaze movement speed (evening/night moves slower)
-- Base eyelid position (night has heavier "droopy" lids)
+data/                        # Audio files (happy, confused, yawn, tick)
+lib/                         # Waveshare GFX, ES8311 driver
+```
 
-## Eye Shape Parameters
+---
 
-The `EyeShape` structure controls all visual aspects:
+## Development
 
-| Parameter | Range | Description |
-|-----------|-------|-------------|
-| `width` | 0.5-1.5 | Eye width multiplier |
-| `height` | 0.5-1.5 | Eye height multiplier |
-| `cornerRadius` | 0.0-2.0 | Corner roundness |
-| `offsetX/Y` | -1.0-1.0 | Gaze direction |
-| `topLid/bottomLid` | 0.0-1.0 | Eyelid closure |
-| `innerCornerY` | -1.0-1.0 | Inner corner vertical offset |
-| `outerCornerY` | -1.0-1.0 | Outer corner vertical offset |
-| `openness` | 0.0-1.0 | Overall eye openness (blink) |
-| `topPinch/bottomPinch` | 0.0-1.0 | Edge pinch for pointed shapes |
-| `topCurve/bottomCurve` | 0.0-1.0 | Edge curve for crescents |
-| `stretch` | 0.5-1.5 | Horizontal stretch multiplier |
-| `squash` | 0.5-1.5 | Vertical squash multiplier |
+### Adding Expressions
 
-## Adding New Expressions
+1. Add enum to `Expression` in `expressions.h`
+2. Create preset in `ExpressionPresets` namespace
+3. Add to `getExpressionShape()` and `getExpressionName()` switches
 
-1. Add enum value to `Expression` in `expressions.h`
-2. Create preset function in `ExpressionPresets` namespace
-3. Add case to `getExpressionShape()` switch
-4. Add name to `getExpressionName()` switch
-
-Example:
 ```cpp
 inline EyeShape myExpression() {
     EyeShape s;
     s.height = 0.8f;
-    s.outerCornerY = 0.2f;  // Raised outer corners
+    s.outerCornerY = 0.2f;
     return s;
 }
 ```
 
-## Coordinate System Note
+### Eye Shape Parameters
 
-The display is physically rotated 90° counter-clockwise (CCW):
-- Physical screen: 368×448 pixels (portrait hardware)
-- Buffer: 336×416 pixels (inside 16px progress bar margins)
-- Buffer positioned at screen (16, 16)
-- Buffer X (0-336) → Screen vertical (up/down on screen)
-- Buffer Y (0-416) → Screen horizontal (left/right on screen)
-- "Top lid" in code → appears at top of screen
-- Eye "width" in buffer → vertical extent on screen
-- Eyes side-by-side horizontally = different buffer Y positions
+| Parameter | Description |
+|-----------|-------------|
+| `width`, `height` | Size multipliers (0.5-1.5) |
+| `cornerRadius` | Roundness (0.0-2.0) |
+| `offsetX/Y` | Gaze direction (-1.0 to 1.0) |
+| `topLid`, `bottomLid` | Eyelid closure (0.0-1.0) |
+| `innerCornerY`, `outerCornerY` | Corner offsets |
+| `openness` | Overall eye openness (blink) |
+| `topCurve`, `bottomCurve` | Edge curves for crescents |
+| `stretch`, `squash` | Shape distortion |
 
-## Dependencies
+### Display Rotation Note
 
-Managed via PlatformIO:
-- `lvgl/lvgl@^8.4.0` - Graphics library (for display driver)
+The display is physically rotated 90° CCW:
+- Buffer X (0-336) → Screen vertical
+- Buffer Y (0-416) → Screen horizontal
+- Eyes positioned side-by-side via different buffer Y values
+
+---
+
+## Technical Details
+
+- **Rendering**: 30fps software per-pixel evaluation, RGB565 framebuffer
+- **Optimization**: Dirty-rect clearing, partial screen blit, shape-aware bounds
+- **Processing**: Display on Core 1, audio on Core 0
+- **Storage**: Settings persisted via Preferences, audio via LittleFS
+
+### Dependencies
+- `lvgl/lvgl@^8.4.0` - Display driver
 - `earlephilhower/ESP8266Audio@^1.9.7` - MP3 decoding
-
-Local libraries (in `lib/`):
-- GFX Library for Arduino (Waveshare customized)
+- GFX Library for Arduino (Waveshare)
 - ES8311 codec driver
 
-## Configuration
-
-Key settings in `platformio.ini`:
-- Display: 448x368 pixels
-- Flash: 16MB with LittleFS partition
-- PSRAM: Enabled for framebuffer allocation
-
-Behavioral timing in source files:
-- Blink interval: 6-10 seconds
-- Gaze shift: 1.5-3 seconds
-- Sleep timeout: 30 minutes
+---
 
 ## License
 
@@ -399,6 +204,5 @@ This project is provided for educational and personal use.
 
 ## Acknowledgments
 
-- Inspired by Anki's Cozmo robot eye animations
-- Built for Waveshare ESP32-S3-Touch-AMOLED-1.8 hardware
-- Uses ESP8266Audio library for MP3 playback
+- Inspired by Anki's Cozmo robot
+- Built for Waveshare ESP32-S3-Touch-AMOLED-1.8
