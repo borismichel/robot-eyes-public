@@ -18,6 +18,12 @@
  * - POST /api/wifi/disable - Disable WiFi completely
  * - POST /api/pomodoro/start - Start pomodoro timer
  * - POST /api/pomodoro/stop  - Stop pomodoro timer
+ * - GET /api/system/info     - System info (version, memory)
+ * - POST /api/ota/upload     - Upload firmware
+ * - GET /api/ota/status      - OTA progress status
+ * - POST /api/ota/cancel     - Cancel OTA upload
+ * - POST /api/system/restart - Restart device
+ * - POST /api/system/rollback - Rollback to previous firmware
  */
 
 #ifndef WEB_SERVER_H
@@ -31,6 +37,8 @@
 class SettingsMenu;
 class PomodoroTimer;
 class WiFiManager;
+class OtaManager;
+class BreathingExercise;
 
 // Expression preview callback type
 typedef void (*ExpressionCallback)(int expressionIndex);
@@ -55,9 +63,10 @@ public:
      * @param settings Pointer to SettingsMenu for reading/writing settings
      * @param pomodoro Pointer to PomodoroTimer for status/control
      * @param wifi Pointer to WiFiManager for WiFi operations
+     * @param ota Pointer to OtaManager for firmware updates (optional)
      * @return true if server started successfully
      */
-    bool begin(SettingsMenu* settings, PomodoroTimer* pomodoro, WiFiManager* wifi);
+    bool begin(SettingsMenu* settings, PomodoroTimer* pomodoro, WiFiManager* wifi, OtaManager* ota = nullptr);
 
     /**
      * @brief Stop the web server
@@ -98,6 +107,12 @@ public:
      */
     void setMoodGetterCallback(MoodGetterCallback callback) { moodGetterCallback = callback; }
 
+    /**
+     * @brief Set breathing exercise instance for wellness features
+     * @param breathing Pointer to BreathingExercise
+     */
+    void setBreathingExercise(BreathingExercise* breathing) { breathingExercise = breathing; }
+
 private:
     ExpressionCallback expressionCallback;
     AudioTestCallback audioTestCallback;
@@ -106,6 +121,8 @@ private:
     SettingsMenu* settingsMenu;
     PomodoroTimer* pomodoroTimer;
     WiFiManager* wifiManager;
+    OtaManager* otaManager;
+    BreathingExercise* breathingExercise;
     bool settingsChanged;
 
     // Static handler wrappers (esp_http_server requires C-style callbacks)
@@ -123,6 +140,17 @@ private:
     static esp_err_t handlePomodoroStop(httpd_req_t* req);
     static esp_err_t handlePostExpression(httpd_req_t* req);
     static esp_err_t handleAudioTest(httpd_req_t* req);
+
+    // OTA handlers
+    static esp_err_t handleGetSystemInfo(httpd_req_t* req);
+    static esp_err_t handleOtaUpload(httpd_req_t* req);
+    static esp_err_t handleGetOtaStatus(httpd_req_t* req);
+    static esp_err_t handleOtaCancel(httpd_req_t* req);
+    static esp_err_t handleSystemRestart(httpd_req_t* req);
+    static esp_err_t handleSystemRollback(httpd_req_t* req);
+
+    // Breathing/Wellness handlers
+    static esp_err_t handleBreathingStart(httpd_req_t* req);
 
     // Helper to get WebServerManager instance from request context
     static WebServerManager* getInstance(httpd_req_t* req);

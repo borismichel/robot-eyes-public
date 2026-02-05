@@ -11,6 +11,7 @@
 
 #include "settings_menu.h"
 #include "pomodoro.h"
+#include "../behavior/breathing_exercise.h"
 #include <cmath>
 #include <time.h>
 
@@ -73,6 +74,7 @@ static const uint8_t FONT_5X7[][5] = {
 
 const char* SettingsMenu::mainPageLabels[NUM_MAIN_PAGES] = {
     "POMODORO",
+    "MINDFUL",
     "SETTINGS",
     "EXIT"
 };
@@ -84,6 +86,14 @@ const char* SettingsMenu::pomoPageLabels[POMO_NUM_PAGES] = {
     "LONG BRK",
     "SESSIONS",
     "TICKING",
+    "BACK"
+};
+
+const char* SettingsMenu::mindfulPageLabels[MINDFUL_NUM_PAGES] = {
+    "BREATHE",
+    "SCHEDULE",
+    "SOUND",
+    "INTERVAL",
     "BACK"
 };
 
@@ -104,6 +114,7 @@ SettingsMenu::SettingsMenu()
     : menuOpen(false)
     , currentPage(0)
     , pomodoroTimer(nullptr)
+    , breathingExercise(nullptr)
     , colorIndex(0)
     , timeHour(12)
     , timeMinute(0)
@@ -116,6 +127,8 @@ SettingsMenu::SettingsMenu()
     , pomoSubPage(0)
     , settingsSubMenuOpen(false)
     , settingsSubPage(0)
+    , mindfulSubMenuOpen(false)
+    , mindfulSubPage(0)
     , wasTouched(false)
     , touchStartX(0)
     , touchStartY(0)
@@ -232,6 +245,9 @@ bool SettingsMenu::handleTouch(bool touched, int16_t x, int16_t y) {
     if (pomoSubMenuOpen) {
         return handlePomoSubMenuTouch(touched, x, y);
     }
+    if (mindfulSubMenuOpen) {
+        return handleMindfulSubMenuTouch(touched, x, y);
+    }
     if (settingsSubMenuOpen) {
         return handleSettingsSubMenuTouch(touched, x, y);
     }
@@ -296,6 +312,9 @@ bool SettingsMenu::handleTouch(bool touched, int16_t x, int16_t y) {
             if (currentPage == PAGE_POMODORO) {
                 // Tap to open pomodoro sub-menu
                 openPomoSubMenu();
+            } else if (currentPage == PAGE_MINDFULNESS) {
+                // Tap to open mindfulness sub-menu
+                openMindfulSubMenu();
             } else if (currentPage == PAGE_SETTINGS) {
                 // Tap to open settings sub-menu
                 openSettingsSubMenu();
@@ -327,12 +346,16 @@ void SettingsMenu::render(uint16_t* buffer, int16_t bufWidth, int16_t bufHeight,
         renderPomoSubMenu(buffer, bufWidth, bufHeight);
         return;
     }
+    if (mindfulSubMenuOpen) {
+        renderMindfulSubMenu(buffer, bufWidth, bufHeight);
+        return;
+    }
     if (settingsSubMenuOpen) {
         renderSettingsSubMenu(buffer, bufWidth, bufHeight, micLevel);
         return;
     }
 
-    // Layout for landscape screen - main menu has 2 pages
+    // Layout for landscape screen - main menu
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, 25, mainPageLabels[currentPage], TEXT_COLOR);
 
     if (currentPage == PAGE_POMODORO) {
@@ -364,6 +387,22 @@ void SettingsMenu::render(uint16_t* buffer, int16_t bufWidth, int16_t bufHeight,
             drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, SCREEN_H / 2 - 20, durStr, TEXT_COLOR);
 
             drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, SCREEN_H / 2 + 20, "TAP TO OPEN", ARROW_COLOR);
+        }
+    } else if (currentPage == PAGE_MINDFULNESS) {
+        // Mindfulness entry page - shows breathing status
+        if (breathingExercise == nullptr) {
+            drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, SCREEN_H / 2, "NOT INIT", TEXT_COLOR);
+        } else {
+            // Show schedule status
+            if (breathingExercise->isEnabled()) {
+                char intervalStr[32];
+                sprintf(intervalStr, "EVERY %d MIN", breathingExercise->getIntervalMinutes());
+                drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, SCREEN_H / 2 - 20, intervalStr, SLIDER_FILL_COLOR);
+                drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, SCREEN_H / 2 + 20, "SCHEDULED", TEXT_COLOR);
+            } else {
+                drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, SCREEN_H / 2, "SCHEDULE OFF", TEXT_COLOR);
+            }
+            drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, SCREEN_H - 50, "TAP TO OPEN", ARROW_COLOR);
         }
     } else if (currentPage == PAGE_SETTINGS) {
         // Settings entry page - tap to open sub-menu
@@ -1344,17 +1383,48 @@ void SettingsMenu::renderFirstBootSetup(uint16_t* buffer, int16_t bufWidth, int1
     }
 
     // Title at top
-    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, 30, "WELCOME", color);
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, 30, "WIFI SETUP", color);
 
-    // WiFi AP info section (compact)
-    int16_t y = 80;
-    const int lineSpacing = 35;
+    // Connection instructions - show SSID, password, and IP clearly
+    int16_t y = 90;
+    const int lineSpacing = 45;
 
-    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "WIFI NETWORK", TEXT_COLOR);
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "CONNECT TO", TEXT_COLOR);
     y += lineSpacing;
+
+    // SSID (in accent color)
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "DESKBUDDY-SETUP", color);
+    y += lineSpacing + 10;
+
+    // Password label
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "PASSWORD", TEXT_COLOR);
     y += lineSpacing;
-    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "PASS: DESKBUDDY", TEXT_COLOR);
+
+    // Password value
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "DESKBUDDY", color);
+    y += lineSpacing + 10;
+
+    // IP address info
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "THEN OPEN", TEXT_COLOR);
+    y += lineSpacing;
+
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "192.168.4.1", color);
+
+    // Hint at bottom
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, SCREEN_H - 30, "WAITING FOR CONNECTION", ARROW_COLOR);
+}
+
+void SettingsMenu::renderWiFiChoiceScreen(uint16_t* buffer, int16_t bufWidth, int16_t bufHeight, uint16_t color) {
+    // Clear buffer to black
+    for (int i = 0; i < bufWidth * bufHeight; i++) {
+        buffer[i] = BG_COLOR;
+    }
+
+    // Title at top
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, 40, "CONNECTED!", color);
+
+    // Subtitle
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, 90, "CHOOSE AN OPTION", TEXT_COLOR);
 
     // Divider line position
     int16_t dividerY = SCREEN_H / 2;
@@ -1363,16 +1433,189 @@ void SettingsMenu::renderFirstBootSetup(uint16_t* buffer, int16_t bufWidth, int1
     drawFilledRect(buffer, bufWidth, bufHeight, 40, dividerY - 1, SCREEN_W - 80, 2, TEXT_COLOR);
 
     // Top button area: "Configure WiFi" (above divider)
-    int16_t topButtonY = dividerY - 60;
+    int16_t topButtonY = dividerY - 70;
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, topButtonY, "TAP HERE TO", TEXT_COLOR);
-    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, topButtonY + 35, "CONFIGURE WIFI", color);
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, topButtonY + 40, "CONFIGURE WIFI", color);
 
     // Bottom button area: "Use Offline" (below divider)
-    int16_t bottomButtonY = dividerY + 40;
+    int16_t bottomButtonY = dividerY + 35;
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, bottomButtonY, "TAP HERE TO", TEXT_COLOR);
-    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, bottomButtonY + 35, "USE OFFLINE", color);
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, bottomButtonY + 40, "USE OFFLINE", color);
 
     // Hint at bottom
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, SCREEN_H - 30, "AP STAYS ON FOR CONFIG", ARROW_COLOR);
+}
+
+//=============================================================================
+// Mindfulness Sub-Menu
+//=============================================================================
+
+void SettingsMenu::openMindfulSubMenu() {
+    mindfulSubMenuOpen = true;
+    mindfulSubPage = MINDFUL_PAGE_BREATHE_NOW;
+    Serial.println("Mindfulness sub-menu opened");
+}
+
+void SettingsMenu::closeMindfulSubMenu() {
+    mindfulSubMenuOpen = false;
+    mindfulSubPage = 0;
+    Serial.println("Mindfulness sub-menu closed");
+}
+
+void SettingsMenu::mindfulNextPage() {
+    if (mindfulSubPage < MINDFUL_NUM_PAGES - 1) {
+        mindfulSubPage++;
+        Serial.printf("Mindful page: %d (%s)\n", mindfulSubPage, mindfulPageLabels[mindfulSubPage]);
+    }
+}
+
+void SettingsMenu::mindfulPrevPage() {
+    if (mindfulSubPage > 0) {
+        mindfulSubPage--;
+        Serial.printf("Mindful page: %d (%s)\n", mindfulSubPage, mindfulPageLabels[mindfulSubPage]);
+    }
+}
+
+bool SettingsMenu::handleMindfulSubMenuTouch(bool touched, int16_t x, int16_t y) {
+    // With 90° CCW rotation: visual vertical = raw X movement
+    if (touched && !wasTouched) {
+        touchStartX = x;
+        touchStartY = y;
+        touchCurrentY = y;
+        isDraggingSlider = false;
+        isSwiping = false;
+    }
+
+    if (touched) {
+        touchCurrentY = y;
+        int16_t deltaX = x - touchStartX;
+
+        // Detect swipe
+        if (abs(deltaX) > SWIPE_THRESHOLD && !isDraggingSlider) {
+            isSwiping = true;
+        }
+    }
+
+    if (!touched && wasTouched) {
+        int16_t deltaX = x - touchStartX;
+
+        if (isSwiping) {
+            // Swipe up (raw X decreases) = next page, swipe down (raw X increases) = prev page
+            if (deltaX > SWIPE_THRESHOLD) {
+                mindfulPrevPage();
+            } else if (deltaX < -SWIPE_THRESHOLD) {
+                mindfulNextPage();
+            }
+        } else if (!isDraggingSlider && !isSwiping) {
+            // Tap handling for mindfulness pages
+            if (mindfulSubPage == MINDFUL_PAGE_BREATHE_NOW) {
+                // Trigger breathing exercise now
+                if (breathingExercise != nullptr) {
+                    breathingExercise->triggerNow();
+                    Serial.println("Breathing triggered from menu");
+                    close();  // Close menu to show breathing
+                }
+            } else if (mindfulSubPage == MINDFUL_PAGE_ENABLE) {
+                // Toggle schedule
+                if (breathingExercise != nullptr) {
+                    breathingExercise->setEnabled(!breathingExercise->isEnabled());
+                    Serial.printf("Breathing schedule: %s\n", breathingExercise->isEnabled() ? "ON" : "OFF");
+                }
+            } else if (mindfulSubPage == MINDFUL_PAGE_SOUND) {
+                // Toggle sound
+                if (breathingExercise != nullptr) {
+                    breathingExercise->setSoundEnabled(!breathingExercise->isSoundEnabled());
+                    Serial.printf("Breathing sound: %s\n", breathingExercise->isSoundEnabled() ? "ON" : "OFF");
+                }
+            } else if (mindfulSubPage == MINDFUL_PAGE_INTERVAL) {
+                // Cycle through intervals: 30, 60, 90, 120, 180 minutes
+                if (breathingExercise != nullptr) {
+                    int currentInterval = breathingExercise->getIntervalMinutes();
+                    int newInterval;
+                    if (currentInterval < 45) newInterval = 60;
+                    else if (currentInterval < 75) newInterval = 90;
+                    else if (currentInterval < 105) newInterval = 120;
+                    else if (currentInterval < 150) newInterval = 180;
+                    else newInterval = 30;
+                    breathingExercise->setIntervalMinutes(newInterval);
+                    Serial.printf("Breathing interval: %d min\n", newInterval);
+                }
+            } else if (mindfulSubPage == MINDFUL_PAGE_BACK) {
+                closeMindfulSubMenu();
+            }
+        }
+
+        isDraggingSlider = false;
+        isSwiping = false;
+    }
+
+    wasTouched = touched;
+    return true;
+}
+
+void SettingsMenu::renderMindfulSubMenu(uint16_t* buffer, int16_t bufW, int16_t bufH) {
+    // Title
+    drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, 25, mindfulPageLabels[mindfulSubPage], TEXT_COLOR);
+
+    if (mindfulSubPage == MINDFUL_PAGE_BREATHE_NOW) {
+        // Breathe now page
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 - 20, "START A", TEXT_COLOR);
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 + 20, "BREATHING", TEXT_COLOR);
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 + 60, "EXERCISE", TEXT_COLOR);
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H - 50, "TAP TO START", SLIDER_FILL_COLOR);
+    } else if (mindfulSubPage == MINDFUL_PAGE_ENABLE) {
+        // Schedule enable/disable
+        if (breathingExercise != nullptr) {
+            const char* status = breathingExercise->isEnabled() ? "ON" : "OFF";
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 - 20, "SCHEDULED", TEXT_COLOR);
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 + 20, "REMINDERS", TEXT_COLOR);
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H - 50, status,
+                             breathingExercise->isEnabled() ? SLIDER_FILL_COLOR : ARROW_COLOR);
+        } else {
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2, "NOT INIT", TEXT_COLOR);
+        }
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H - 80, "TAP TO TOGGLE", ARROW_COLOR);
+    } else if (mindfulSubPage == MINDFUL_PAGE_SOUND) {
+        // Sound enable/disable
+        if (breathingExercise != nullptr) {
+            const char* status = breathingExercise->isSoundEnabled() ? "ON" : "OFF";
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 - 20, "BREATHING", TEXT_COLOR);
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 + 20, "SOUNDS", TEXT_COLOR);
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H - 50, status,
+                             breathingExercise->isSoundEnabled() ? SLIDER_FILL_COLOR : ARROW_COLOR);
+        } else {
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2, "NOT INIT", TEXT_COLOR);
+        }
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H - 80, "TAP TO TOGGLE", ARROW_COLOR);
+    } else if (mindfulSubPage == MINDFUL_PAGE_INTERVAL) {
+        // Interval setting
+        if (breathingExercise != nullptr) {
+            char intervalStr[32];
+            sprintf(intervalStr, "%d MIN", breathingExercise->getIntervalMinutes());
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 - 20, "REMINDER", TEXT_COLOR);
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 + 20, "INTERVAL", TEXT_COLOR);
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H - 50, intervalStr, SLIDER_FILL_COLOR);
+        } else {
+            drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2, "NOT INIT", TEXT_COLOR);
+        }
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H - 80, "TAP TO CHANGE", ARROW_COLOR);
+    } else if (mindfulSubPage == MINDFUL_PAGE_BACK) {
+        // Back page
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 - 15, "TAP TO", TEXT_COLOR);
+        drawCenteredText(buffer, bufW, bufH, SCREEN_W / 2, SCREEN_H / 2 + 15, "GO BACK", TEXT_COLOR);
+    }
+
+    // Page pips - vertical on right side
+    int16_t pipX = SCREEN_W - 15;
+    int16_t pipSpacing = 25;
+    int16_t pipsStartY = SCREEN_H / 2 - (MINDFUL_NUM_PAGES - 1) * pipSpacing / 2;
+    for (int i = 0; i < MINDFUL_NUM_PAGES; i++) {
+        int16_t pipY = pipsStartY + i * pipSpacing;
+        if (i == mindfulSubPage) {
+            drawFilledRect(buffer, bufW, bufH, pipX - 5, pipY - 5, 10, 10, TEXT_COLOR);
+        } else {
+            drawFilledRect(buffer, bufW, bufH, pipX - 3, pipY - 3, 6, 6, ARROW_COLOR);
+        }
+    }
 }
 

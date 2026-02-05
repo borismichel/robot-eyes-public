@@ -34,8 +34,11 @@
 
 #include "web_server.h"
 #include "wifi_manager.h"
+#include "ota_manager.h"
 #include "../ui/settings_menu.h"
 #include "../ui/pomodoro.h"
+#include "../behavior/breathing_exercise.h"
+#include "version.h"
 #include <WiFi.h>
 
 WebServerManager::WebServerManager()
@@ -43,6 +46,8 @@ WebServerManager::WebServerManager()
     , settingsMenu(nullptr)
     , pomodoroTimer(nullptr)
     , wifiManager(nullptr)
+    , otaManager(nullptr)
+    , breathingExercise(nullptr)
     , settingsChanged(false)
     , expressionCallback(nullptr)
     , audioTestCallback(nullptr)
@@ -54,10 +59,11 @@ WebServerManager::~WebServerManager() {
     stop();
 }
 
-bool WebServerManager::begin(SettingsMenu* settings, PomodoroTimer* pomodoro, WiFiManager* wifi) {
+bool WebServerManager::begin(SettingsMenu* settings, PomodoroTimer* pomodoro, WiFiManager* wifi, OtaManager* ota) {
     settingsMenu = settings;
     pomodoroTimer = pomodoro;
     wifiManager = wifi;
+    otaManager = ota;
 
     if (server != nullptr) {
         Serial.println("[WebServer] Already running");
@@ -66,7 +72,8 @@ bool WebServerManager::begin(SettingsMenu* settings, PomodoroTimer* pomodoro, Wi
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 15;
+    config.max_uri_handlers = 22;  // +1 for breathing endpoint
+    config.stack_size = 8192;  // Larger stack for OTA uploads
 
     esp_err_t err = httpd_start(&server, &config);
     if (err != ESP_OK) {
@@ -190,6 +197,64 @@ bool WebServerManager::begin(SettingsMenu* settings, PomodoroTimer* pomodoro, Wi
     };
     httpd_register_uri_handler(server, &audioTestUri);
 
+    // OTA endpoints
+    httpd_uri_t systemInfoUri = {
+        .uri = "/api/system/info",
+        .method = HTTP_GET,
+        .handler = handleGetSystemInfo,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &systemInfoUri);
+
+    httpd_uri_t otaUploadUri = {
+        .uri = "/api/ota/upload",
+        .method = HTTP_POST,
+        .handler = handleOtaUpload,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &otaUploadUri);
+
+    httpd_uri_t otaStatusUri = {
+        .uri = "/api/ota/status",
+        .method = HTTP_GET,
+        .handler = handleGetOtaStatus,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &otaStatusUri);
+
+    httpd_uri_t otaCancelUri = {
+        .uri = "/api/ota/cancel",
+        .method = HTTP_POST,
+        .handler = handleOtaCancel,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &otaCancelUri);
+
+    httpd_uri_t systemRestartUri = {
+        .uri = "/api/system/restart",
+        .method = HTTP_POST,
+        .handler = handleSystemRestart,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &systemRestartUri);
+
+    httpd_uri_t systemRollbackUri = {
+        .uri = "/api/system/rollback",
+        .method = HTTP_POST,
+        .handler = handleSystemRollback,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &systemRollbackUri);
+
+    // Breathing/Wellness endpoints
+    httpd_uri_t breathingStartUri = {
+        .uri = "/api/breathing/start",
+        .method = HTTP_POST,
+        .handler = handleBreathingStart,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &breathingStartUri);
+
     Serial.printf("[WebServer] Started on port %d\n", config.server_port);
     return true;
 }
@@ -293,6 +358,28 @@ esp_err_t WebServerManager::handlePostSettings(httpd_req_t* req) {
         }
         if (doc["tickingEnabled"].is<bool>()) {
             self->pomodoroTimer->setTickingEnabled(doc["tickingEnabled"].as<bool>());
+        }
+    }
+
+    // Apply breathing settings
+    if (self->breathingExercise) {
+        if (doc["breathingEnabled"].is<bool>()) {
+            self->breathingExercise->setEnabled(doc["breathingEnabled"].as<bool>());
+        }
+        if (doc["breathingSoundEnabled"].is<bool>()) {
+            self->breathingExercise->setSoundEnabled(doc["breathingSoundEnabled"].as<bool>());
+        }
+        if (doc["breathingStartHour"].is<int>() || doc["breathingEndHour"].is<int>()) {
+            int start = doc["breathingStartHour"].is<int>()
+                ? doc["breathingStartHour"].as<int>()
+                : self->breathingExercise->getStartHour();
+            int end = doc["breathingEndHour"].is<int>()
+                ? doc["breathingEndHour"].as<int>()
+                : self->breathingExercise->getEndHour();
+            self->breathingExercise->setTimeWindow(start, end);
+        }
+        if (doc["breathingIntervalMinutes"].is<int>()) {
+            self->breathingExercise->setIntervalMinutes(doc["breathingIntervalMinutes"].as<int>());
         }
     }
 
@@ -529,6 +616,213 @@ esp_err_t WebServerManager::handleAudioTest(httpd_req_t* req) {
 }
 
 // ============================================================================
+// OTA Handlers
+// ============================================================================
+
+esp_err_t WebServerManager::handleGetSystemInfo(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    JsonDocument doc;
+    doc["version"] = OtaManager::getVersion();
+    doc["buildDate"] = OtaManager::getBuildDate();
+    doc["releaseNotes"] = FIRMWARE_RELEASE_NOTES;
+    doc["freeHeap"] = ESP.getFreeHeap();
+    doc["minFreeHeap"] = ESP.getMinFreeHeap();
+    doc["uptimeSeconds"] = millis() / 1000;
+
+    if (self->otaManager) {
+        doc["partitionLabel"] = self->otaManager->getPartitionLabel();
+        doc["otaPartitionSize"] = self->otaManager->getOtaPartitionSize();
+        doc["canRollback"] = self->otaManager->canRollback();
+        doc["signatureRequired"] = self->otaManager->hasSigningKey();
+    }
+
+    String json;
+    serializeJson(doc, json);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json.c_str(), json.length());
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleOtaUpload(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    if (!self->otaManager) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA not initialized");
+        return ESP_FAIL;
+    }
+
+    size_t totalSize = req->content_len;
+    if (totalSize == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No content");
+        return ESP_FAIL;
+    }
+
+    Serial.printf("[WebServer] OTA upload starting, size: %u bytes\n", totalSize);
+
+    // Start OTA upload
+    if (!self->otaManager->startUpload(totalSize)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                           self->otaManager->getErrorMessage());
+        return ESP_FAIL;
+    }
+
+    // Read and write in chunks
+    const size_t CHUNK_SIZE = 4096;
+    uint8_t* buffer = (uint8_t*)malloc(CHUNK_SIZE);
+    if (!buffer) {
+        self->otaManager->cancelUpload();
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    size_t remaining = totalSize;
+    bool success = true;
+
+    while (remaining > 0) {
+        size_t toRead = (remaining > CHUNK_SIZE) ? CHUNK_SIZE : remaining;
+        int received = httpd_req_recv(req, (char*)buffer, toRead);
+
+        if (received <= 0) {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;  // Retry on timeout
+            }
+            Serial.println("[WebServer] OTA receive error");
+            success = false;
+            break;
+        }
+
+        if (!self->otaManager->writeChunk(buffer, received)) {
+            success = false;
+            break;
+        }
+
+        remaining -= received;
+    }
+
+    free(buffer);
+
+    if (!success) {
+        self->otaManager->cancelUpload();
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                           self->otaManager->getErrorMessage());
+        return ESP_FAIL;
+    }
+
+    // Finalize upload
+    if (!self->otaManager->finishUpload()) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                           self->otaManager->getErrorMessage());
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Update complete. Restarting...\"}");
+
+    // Schedule restart
+    delay(500);
+    self->otaManager->restart();
+
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleGetOtaStatus(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    JsonDocument doc;
+    if (self->otaManager) {
+        doc["state"] = self->otaManager->getStateString();
+        doc["progress"] = self->otaManager->getProgress();
+        doc["bytesReceived"] = self->otaManager->getBytesReceived();
+        doc["totalBytes"] = self->otaManager->getTotalBytes();
+        const char* errMsg = self->otaManager->getErrorMessage();
+        if (errMsg && errMsg[0] != '\0') {
+            doc["errorMessage"] = errMsg;
+        } else {
+            doc["errorMessage"] = nullptr;
+        }
+    } else {
+        doc["state"] = "unavailable";
+        doc["errorMessage"] = "OTA not initialized";
+    }
+
+    String json;
+    serializeJson(doc, json);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json.c_str(), json.length());
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleOtaCancel(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    if (self->otaManager) {
+        self->otaManager->cancelUpload();
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true}");
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleSystemRestart(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Restarting...\"}");
+
+    delay(500);
+    if (self->otaManager) {
+        self->otaManager->restart();
+    } else {
+        ESP.restart();
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleSystemRollback(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    if (!self->otaManager) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA not initialized");
+        return ESP_FAIL;
+    }
+
+    if (!self->otaManager->canRollback()) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No previous firmware to rollback to");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Rolling back...\"}");
+
+    delay(500);
+    self->otaManager->rollback();
+
+    return ESP_OK;
+}
+
+// ============================================================================
+// Breathing/Wellness Handlers
+// ============================================================================
+
+esp_err_t WebServerManager::handleBreathingStart(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    if (!self->breathingExercise) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Breathing not initialized");
+        return ESP_FAIL;
+    }
+
+    self->breathingExercise->triggerNow();
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true}");
+    return ESP_OK;
+}
+
+// ============================================================================
 // JSON Builders
 // ============================================================================
 
@@ -551,6 +845,15 @@ void WebServerManager::buildSettingsJson(JsonDocument& doc) {
         pomodoro["longBreakMinutes"] = pomodoroTimer->getLongBreakMinutes();
         pomodoro["sessionsBeforeLongBreak"] = pomodoroTimer->getSessionsBeforeLongBreak();
         pomodoro["tickingEnabled"] = pomodoroTimer->isTickingEnabled();
+    }
+
+    if (breathingExercise) {
+        JsonObject breathing = doc["breathing"].to<JsonObject>();
+        breathing["enabled"] = breathingExercise->isEnabled();
+        breathing["soundEnabled"] = breathingExercise->isSoundEnabled();
+        breathing["startHour"] = breathingExercise->getStartHour();
+        breathing["endHour"] = breathingExercise->getEndHour();
+        breathing["intervalMinutes"] = breathingExercise->getIntervalMinutes();
     }
 }
 
@@ -610,6 +913,17 @@ void WebServerManager::buildStatusJson(JsonDocument& doc) {
         pomodoro["state"] = stateStr;
         pomodoro["remainingSeconds"] = pomodoroTimer->getRemainingSeconds();
         pomodoro["currentSession"] = pomodoroTimer->getSessionNumber();
+    }
+
+    // Breathing status
+    if (breathingExercise) {
+        JsonObject breathing = doc["breathing"].to<JsonObject>();
+        breathing["enabled"] = breathingExercise->isEnabled();
+        breathing["soundEnabled"] = breathingExercise->isSoundEnabled();
+        breathing["active"] = breathingExercise->isActive();
+        breathing["startHour"] = breathingExercise->getStartHour();
+        breathing["endHour"] = breathingExercise->getEndHour();
+        breathing["intervalMinutes"] = breathingExercise->getIntervalMinutes();
     }
 }
 
@@ -954,6 +1268,47 @@ String WebServerManager::generateSettingsPage() {
         .btn-danger:hover { filter: brightness(0.9); }
         .btn + .btn { margin-top: 12px; }
 
+        /* OTA upload */
+        .ota-dropzone {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .ota-dropzone:hover, .ota-dropzone.dragover {
+            border-color: var(--primary);
+            background: rgba(223, 255, 0, 0.05);
+        }
+        .ota-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+            color: var(--muted-foreground);
+        }
+        .ota-progress {
+            margin-top: 16px;
+        }
+        .ota-progress-bar {
+            height: 8px;
+            background: var(--secondary);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .ota-progress-fill {
+            height: 100%;
+            background: var(--primary);
+            width: 0%;
+            transition: width 0.3s;
+        }
+        .ota-status {
+            margin-top: 8px;
+            font-size: 14px;
+            color: var(--muted-foreground);
+        }
+        .ota-success { color: #00FF00; }
+        .ota-error { color: var(--destructive); }
+
         /* WiFi list */
         .wifi-list {
             max-height: 240px;
@@ -1086,6 +1441,46 @@ String WebServerManager::generateSettingsPage() {
             from { transform: translateX(-50%) translateY(20px); opacity: 0; }
             to { transform: translateX(-50%) translateY(0); opacity: 1; }
         }
+
+        /* Accordions */
+        .accordion {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+        .accordion-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            background: var(--card);
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.2s;
+        }
+        .accordion-header:hover {
+            background: var(--secondary);
+        }
+        .accordion-title {
+            font-weight: 500;
+        }
+        .accordion-icon {
+            transition: transform 0.2s;
+            color: var(--muted-foreground);
+        }
+        .accordion.open .accordion-icon {
+            transform: rotate(180deg);
+        }
+        .accordion-content {
+            display: none;
+            padding: 20px;
+            background: var(--card);
+            border-top: 1px solid var(--border);
+        }
+        .accordion.open .accordion-content {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -1101,11 +1496,9 @@ String WebServerManager::generateSettingsPage() {
 
     <div class="tabs">
         <button class="tab active" data-tab="dashboard">Dashboard</button>
-        <button class="tab" data-tab="display">Display</button>
-        <button class="tab" data-tab="audio">Audio</button>
-        <button class="tab" data-tab="time">Time</button>
-        <button class="tab" data-tab="wifi">WiFi</button>
-        <button class="tab" data-tab="pomodoro">Pomodoro</button>
+        <button class="tab" data-tab="productivity">Productivity</button>
+        <button class="tab" data-tab="mindfulness">Mindfulness</button>
+        <button class="tab" data-tab="settings">Settings</button>
         <button class="tab" data-tab="expressions">Expressions</button>
     </div>
 
@@ -1168,203 +1561,277 @@ String WebServerManager::generateSettingsPage() {
             </div>
         </section>
 
-        <!-- Display Settings -->
-        <section id="display" class="section">
-            <span class="section-header">Display</span>
-            <div class="card">
-                <div class="form-group">
-                    <div class="form-label">
-                        <span>Brightness</span>
-                        <span class="form-value" id="brightness-val">100%</span>
+        <!-- Settings (accordions) -->
+        <section id="settings" class="section">
+            <span class="section-header">Device Settings</span>
+
+            <!-- Display Accordion (open by default) -->
+            <div class="accordion open" data-accordion="display">
+                <div class="accordion-header" onclick="toggleAccordion('display')">
+                    <span class="accordion-title">Display</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="form-group">
+                        <div class="form-label">
+                            <span>Brightness</span>
+                            <span class="form-value" id="brightness-val">100%</span>
+                        </div>
+                        <input type="range" id="brightness" min="0" max="100" value="100">
                     </div>
-                    <input type="range" id="brightness" min="0" max="100" value="100">
+                    <div style="margin-top: 20px;">
+                        <div class="card-title">Eye Color</div>
+                        <div class="color-grid" id="color-grid"></div>
+                    </div>
                 </div>
             </div>
-            <div class="card">
-                <div class="card-title">Eye Color</div>
-                <div class="color-grid" id="color-grid"></div>
+
+            <!-- Audio Accordion -->
+            <div class="accordion" data-accordion="audio">
+                <div class="accordion-header" onclick="toggleAccordion('audio')">
+                    <span class="accordion-title">Audio</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="form-group">
+                        <div class="form-label">
+                            <span>Volume</span>
+                            <span class="form-value" id="volume-val">50%</span>
+                        </div>
+                        <input type="range" id="volume" min="0" max="100" value="50">
+                    </div>
+                    <div class="form-group">
+                        <div class="form-label">
+                            <span>Microphone Gain</span>
+                            <span class="form-value" id="micGain-val">50%</span>
+                        </div>
+                        <input type="range" id="micGain" min="0" max="100" value="50">
+                    </div>
+                    <div class="form-group">
+                        <div class="form-label">
+                            <span>Mic Threshold</span>
+                            <span class="form-value" id="micThreshold-val">50%</span>
+                        </div>
+                        <input type="range" id="micThreshold" min="0" max="100" value="50">
+                    </div>
+                    <button class="btn btn-secondary" onclick="testAudio()" style="margin-top: 16px;">Test Audio</button>
+                </div>
+            </div>
+
+            <!-- Time Accordion -->
+            <div class="accordion" data-accordion="time">
+                <div class="accordion-header" onclick="toggleAccordion('time')">
+                    <span class="accordion-title">Time</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="status-row">
+                        <span class="status-row-label">NTP Sync</span>
+                        <span class="status-row-value" id="ntp-status">--</span>
+                    </div>
+                    <div class="form-group" style="margin-top: 16px;">
+                        <div class="form-label"><span>Timezone (UTC)</span></div>
+                        <select id="timezone-select" class="wifi-input" onchange="setTimezone()">
+                            <option value="-12">UTC-12</option>
+                            <option value="-11">UTC-11</option>
+                            <option value="-10">UTC-10 (Hawaii)</option>
+                            <option value="-9">UTC-9 (Alaska)</option>
+                            <option value="-8">UTC-8 (Pacific)</option>
+                            <option value="-7">UTC-7 (Mountain)</option>
+                            <option value="-6">UTC-6 (Central)</option>
+                            <option value="-5">UTC-5 (Eastern)</option>
+                            <option value="-4">UTC-4 (Atlantic)</option>
+                            <option value="-3">UTC-3</option>
+                            <option value="-2">UTC-2</option>
+                            <option value="-1">UTC-1</option>
+                            <option value="0" selected>UTC+0 (GMT)</option>
+                            <option value="1">UTC+1 (CET)</option>
+                            <option value="2">UTC+2 (EET)</option>
+                            <option value="3">UTC+3 (Moscow)</option>
+                            <option value="4">UTC+4</option>
+                            <option value="5">UTC+5</option>
+                            <option value="5.5">UTC+5:30 (India)</option>
+                            <option value="6">UTC+6</option>
+                            <option value="7">UTC+7</option>
+                            <option value="8">UTC+8 (China)</option>
+                            <option value="9">UTC+9 (Japan)</option>
+                            <option value="10">UTC+10 (Sydney)</option>
+                            <option value="11">UTC+11</option>
+                            <option value="12">UTC+12</option>
+                            <option value="13">UTC+13</option>
+                            <option value="14">UTC+14</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-label"><span>Manual Time (offline mode)</span></div>
+                        <div class="time-row">
+                            <select id="time-hour"></select>
+                            <span>:</span>
+                            <select id="time-minute"></select>
+                        </div>
+                    </div>
+                    <div class="toggle-row" style="margin-top: 16px;">
+                        <span class="toggle-label">24-hour format</span>
+                        <label class="toggle">
+                            <input type="checkbox" id="time-24h">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- WiFi Accordion -->
+            <div class="accordion" data-accordion="wifi">
+                <div class="accordion-header" onclick="toggleAccordion('wifi')">
+                    <span class="accordion-title">WiFi</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="status-row">
+                        <span class="status-row-label">Network</span>
+                        <span class="status-row-value" id="wifi-ssid">--</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-row-label">Signal</span>
+                        <span class="status-row-value" id="wifi-rssi">--</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-row-label">IP Address</span>
+                        <span class="status-row-value" id="wifi-ip">--</span>
+                    </div>
+                    <div style="margin-top: 20px;">
+                        <div class="card-title">Available Networks</div>
+                        <div class="wifi-list" id="wifi-list"></div>
+                        <button class="btn btn-secondary" onclick="scanWiFi()">Scan Networks</button>
+                        <div id="wifi-connect-form" class="hidden" style="margin-top: 16px;">
+                            <input type="text" id="wifi-ssid-input" class="wifi-input" placeholder="Network name">
+                            <input type="password" id="wifi-pass-input" class="wifi-input" placeholder="Password">
+                            <button class="btn btn-primary" onclick="connectWiFi()">Connect</button>
+                        </div>
+                    </div>
+                    <div style="margin-top: 20px;">
+                        <div class="card-title">Danger Zone</div>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-danger" style="flex: 1 1 0; min-width: 0;" onclick="forgetWiFi()">Forget Network</button>
+                            <button class="btn btn-danger" style="flex: 1 1 0; min-width: 0; margin-top: 0;" onclick="disableWiFi()">Disable WiFi</button>
+                        </div>
+                        <p style="margin-top: 12px; font-size: 12px; color: #888;">Disabling WiFi will disconnect this page.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Accordion -->
+            <div class="accordion" data-accordion="system">
+                <div class="accordion-header" onclick="toggleAccordion('system')">
+                    <span class="accordion-title">System</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="dashboard-grid" style="margin-bottom: 20px;">
+                        <div class="stat-card">
+                            <div class="stat-label">Version</div>
+                            <div class="stat-value" id="sys-version">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Built</div>
+                            <div class="stat-value" id="sys-build">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Partition</div>
+                            <div class="stat-value" id="sys-partition">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Free Heap</div>
+                            <div class="stat-value" id="sys-heap">--</div>
+                        </div>
+                    </div>
+                    <div class="card-title">What's New</div>
+                    <pre id="sys-notes" style="margin: 0 0 20px 0; font-family: inherit; white-space: pre-wrap; color: var(--muted-foreground); font-size: 14px;">Loading...</pre>
+                    <div class="card-title">Update Firmware</div>
+                    <div id="ota-dropzone" class="ota-dropzone" style="margin-bottom: 20px;">
+                        <div class="ota-icon">&#8681;</div>
+                        <div>Drag firmware.bin here</div>
+                        <div style="font-size: 12px; color: var(--muted-foreground);">or click to browse</div>
+                        <input type="file" id="ota-file" accept=".bin" style="display: none;">
+                    </div>
+                    <div id="ota-progress" class="ota-progress hidden">
+                        <div class="ota-progress-bar">
+                            <div class="ota-progress-fill" id="ota-fill"></div>
+                        </div>
+                        <div class="ota-status" id="ota-status">Uploading...</div>
+                    </div>
+                    <div class="card-title" style="margin-top: 20px;">Danger Zone</div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-danger" style="flex: 1 1 0; min-width: 0;" onclick="restartDevice()">Restart</button>
+                        <button class="btn btn-danger" style="flex: 1 1 0; min-width: 0; margin-top: 0;" id="btn-rollback" onclick="rollbackFirmware()">Rollback</button>
+                    </div>
+                    <p style="margin-top: 12px; font-size: 12px; color: #888;">Rollback reverts to the previous firmware version.</p>
+                </div>
             </div>
         </section>
 
-        <!-- Audio Settings -->
-        <section id="audio" class="section">
-            <span class="section-header">Audio</span>
-            <div class="card">
-                <div class="form-group">
-                    <div class="form-label">
-                        <span>Volume</span>
-                        <span class="form-value" id="volume-val">50%</span>
-                    </div>
-                    <input type="range" id="volume" min="0" max="100" value="50">
-                </div>
-                <div class="form-group">
-                    <div class="form-label">
-                        <span>Microphone Gain</span>
-                        <span class="form-value" id="micGain-val">50%</span>
-                    </div>
-                    <input type="range" id="micGain" min="0" max="100" value="50">
-                </div>
-                <div class="form-group">
-                    <div class="form-label">
-                        <span>Mic Threshold</span>
-                        <span class="form-value" id="micThreshold-val">50%</span>
-                    </div>
-                    <input type="range" id="micThreshold" min="0" max="100" value="50">
-                </div>
-                <button class="btn btn-secondary" onclick="testAudio()" style="margin-top: 16px;">Test Audio</button>
-            </div>
-        </section>
+        <!-- Productivity -->
+        <section id="productivity" class="section">
+            <span class="section-header">Productivity</span>
 
-        <!-- Time Settings -->
-        <section id="time" class="section">
-            <span class="section-header">Time</span>
-            <div class="card">
-                <div class="status-row">
-                    <span class="status-row-label">NTP Sync</span>
-                    <span class="status-row-value" id="ntp-status">--</span>
+            <!-- Pomodoro Accordion -->
+            <div class="accordion open" data-accordion="pomodoro">
+                <div class="accordion-header" onclick="toggleAccordion('pomodoro')">
+                    <span class="accordion-title">Pomodoro Timer</span>
+                    <span class="accordion-icon">&#9660;</span>
                 </div>
-                <div class="form-group">
-                    <div class="form-label"><span>Timezone (UTC)</span></div>
-                    <select id="timezone-select" class="wifi-input" onchange="setTimezone()">
-                        <option value="-12">UTC-12</option>
-                        <option value="-11">UTC-11</option>
-                        <option value="-10">UTC-10 (Hawaii)</option>
-                        <option value="-9">UTC-9 (Alaska)</option>
-                        <option value="-8">UTC-8 (Pacific)</option>
-                        <option value="-7">UTC-7 (Mountain)</option>
-                        <option value="-6">UTC-6 (Central)</option>
-                        <option value="-5">UTC-5 (Eastern)</option>
-                        <option value="-4">UTC-4 (Atlantic)</option>
-                        <option value="-3">UTC-3</option>
-                        <option value="-2">UTC-2</option>
-                        <option value="-1">UTC-1</option>
-                        <option value="0" selected>UTC+0 (GMT)</option>
-                        <option value="1">UTC+1 (CET)</option>
-                        <option value="2">UTC+2 (EET)</option>
-                        <option value="3">UTC+3 (Moscow)</option>
-                        <option value="4">UTC+4</option>
-                        <option value="5">UTC+5</option>
-                        <option value="5.5">UTC+5:30 (India)</option>
-                        <option value="6">UTC+6</option>
-                        <option value="7">UTC+7</option>
-                        <option value="8">UTC+8 (China)</option>
-                        <option value="9">UTC+9 (Japan)</option>
-                        <option value="10">UTC+10 (Sydney)</option>
-                        <option value="11">UTC+11</option>
-                        <option value="12">UTC+12</option>
-                        <option value="13">UTC+13</option>
-                        <option value="14">UTC+14</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <div class="form-label"><span>Manual Time (offline mode)</span></div>
-                    <div class="time-row">
-                        <select id="time-hour"></select>
-                        <span>:</span>
-                        <select id="time-minute"></select>
+                <div class="accordion-content">
+                    <div class="card">
+                        <div class="pomodoro-display">
+                            <div class="pomodoro-time" id="pomo-time">--:--</div>
+                            <div class="pomodoro-state" id="pomo-state">Ready</div>
+                        </div>
+                        <button class="btn btn-primary" id="btn-start" onclick="startPomodoro()">Start</button>
+                        <button class="btn btn-danger hidden" id="btn-stop" onclick="stopPomodoro()">Stop</button>
                     </div>
-                </div>
-                <div class="toggle-row">
-                    <span class="toggle-label">24-hour format</span>
-                    <label class="toggle">
-                        <input type="checkbox" id="time-24h">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-            </div>
-        </section>
 
-        <!-- WiFi Settings -->
-        <section id="wifi" class="section">
-            <span class="section-header">WiFi</span>
-            <div class="card">
-                <div class="status-row">
-                    <span class="status-row-label">Network</span>
-                    <span class="status-row-value" id="wifi-ssid">--</span>
-                </div>
-                <div class="status-row">
-                    <span class="status-row-label">Signal</span>
-                    <span class="status-row-value" id="wifi-rssi">--</span>
-                </div>
-                <div class="status-row">
-                    <span class="status-row-label">IP Address</span>
-                    <span class="status-row-value" id="wifi-ip">--</span>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-title">Available Networks</div>
-                <div class="wifi-list" id="wifi-list"></div>
-                <button class="btn btn-secondary" onclick="scanWiFi()">Scan Networks</button>
-                <div id="wifi-connect-form" class="hidden" style="margin-top: 16px;">
-                    <input type="text" id="wifi-ssid-input" class="wifi-input" placeholder="Network name">
-                    <input type="password" id="wifi-pass-input" class="wifi-input" placeholder="Password">
-                    <button class="btn btn-primary" onclick="connectWiFi()">Connect</button>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-title">Danger Zone</div>
-                <div style="display: flex; gap: 8px;">
-                    <button class="btn btn-danger" style="flex: 1 1 0; min-width: 0;" onclick="forgetWiFi()">Forget Network</button>
-                    <button class="btn btn-danger" style="flex: 1 1 0; min-width: 0; margin-top: 0;" onclick="disableWiFi()">Disable WiFi</button>
-                </div>
-                <p style="margin-top: 12px; font-size: 12px; color: #888;">Disabling WiFi will disconnect this page. Use device settings to re-enable.</p>
-            </div>
-        </section>
-
-        <!-- Pomodoro -->
-        <section id="pomodoro" class="section">
-            <span class="section-header">Pomodoro Timer</span>
-            <div class="card">
-                <div class="pomodoro-display">
-                    <div class="pomodoro-time" id="pomo-time">--:--</div>
-                    <div class="pomodoro-state" id="pomo-state">Ready</div>
-                </div>
-                <button class="btn btn-primary" id="btn-start" onclick="startPomodoro()">Start</button>
-                <button class="btn btn-danger hidden" id="btn-stop" onclick="stopPomodoro()">Stop</button>
-            </div>
-
-            <div class="card">
-                <div class="card-title">Durations</div>
-                <div class="form-group">
-                    <div class="form-label">
-                        <span>Work Duration</span>
-                        <span class="form-value" id="workMinutes-val">25 min</span>
+                    <div class="card">
+                        <div class="card-title">Durations</div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Work Duration</span>
+                                <span class="form-value" id="workMinutes-val">25 min</span>
+                            </div>
+                            <input type="range" id="workMinutes" min="1" max="60" value="25">
+                        </div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Short Break</span>
+                                <span class="form-value" id="shortBreakMinutes-val">5 min</span>
+                            </div>
+                            <input type="range" id="shortBreakMinutes" min="1" max="30" value="5">
+                        </div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Long Break</span>
+                                <span class="form-value" id="longBreakMinutes-val">15 min</span>
+                            </div>
+                            <input type="range" id="longBreakMinutes" min="5" max="60" value="15">
+                        </div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Sessions Before Long Break</span>
+                                <span class="form-value" id="sessionsBeforeLongBreak-val">4</span>
+                            </div>
+                            <input type="range" id="sessionsBeforeLongBreak" min="1" max="8" value="4">
+                        </div>
                     </div>
-                    <input type="range" id="workMinutes" min="1" max="60" value="25">
-                </div>
-                <div class="form-group">
-                    <div class="form-label">
-                        <span>Short Break</span>
-                        <span class="form-value" id="shortBreakMinutes-val">5 min</span>
-                    </div>
-                    <input type="range" id="shortBreakMinutes" min="1" max="30" value="5">
-                </div>
-                <div class="form-group">
-                    <div class="form-label">
-                        <span>Long Break</span>
-                        <span class="form-value" id="longBreakMinutes-val">15 min</span>
-                    </div>
-                    <input type="range" id="longBreakMinutes" min="5" max="60" value="15">
-                </div>
-                <div class="form-group">
-                    <div class="form-label">
-                        <span>Sessions Before Long Break</span>
-                        <span class="form-value" id="sessionsBeforeLongBreak-val">4</span>
-                    </div>
-                    <input type="range" id="sessionsBeforeLongBreak" min="1" max="8" value="4">
-                </div>
-            </div>
 
-            <div class="card">
-                <div class="card-title">Options</div>
-                <div class="toggle-row">
-                    <span class="toggle-label">Ticking Sound (last 60s)</span>
-                    <label class="toggle">
-                        <input type="checkbox" id="tickingEnabled" checked>
-                        <span class="slider"></span>
-                    </label>
+                    <div class="card">
+                        <div class="card-title">Options</div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">Ticking Sound (last 60s)</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="tickingEnabled" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -1381,6 +1848,66 @@ String WebServerManager::generateSettingsPage() {
             <div class="card">
                 <div class="card-title">Click to preview on device</div>
                 <div class="expr-grid" id="expr-grid"></div>
+            </div>
+        </section>
+
+        <!-- Mindfulness -->
+        <section id="mindfulness" class="section">
+            <span class="section-header">Mindfulness</span>
+
+            <!-- Box Breathing Accordion -->
+            <div class="accordion open" data-accordion="box-breathing">
+                <div class="accordion-header" onclick="toggleAccordion('box-breathing')">
+                    <span class="accordion-title">Box Breathing</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="card">
+                        <p style="color: var(--muted-foreground); margin-bottom: 16px;">
+                            Inhale 5s, hold 5s, exhale 5s, hold 5s &times; 3 cycles (60 seconds total)
+                        </p>
+                        <button class="btn btn-primary" onclick="startBreathing()">Breathe Now</button>
+                    </div>
+
+                    <div class="card">
+                        <div class="toggle-row">
+                            <span class="toggle-label">Enable Scheduled Reminders</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="breathing-enabled">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="toggle-row" style="margin-top: 12px;">
+                            <span class="toggle-label">Sound</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="breathing-sound-enabled" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="card" id="breathing-schedule-card">
+                        <div class="card-title">Schedule</div>
+
+                        <div class="form-group">
+                            <div class="form-label"><span>Active Hours</span></div>
+                            <div style="display: flex; align-items: center; gap: 12px; margin-top: 8px;">
+                                <select id="breathing-start-hour" class="select-input"></select>
+                                <span>to</span>
+                                <select id="breathing-end-hour" class="select-input"></select>
+                            </div>
+                            <p style="color: var(--muted-foreground); font-size: 12px; margin-top: 8px;">Reminders only appear during this window</p>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 16px;">
+                            <div class="form-label">
+                                <span>Remind Every</span>
+                                <span class="form-value" id="breathing-interval-val">60 min</span>
+                            </div>
+                            <input type="range" id="breathing-interval" min="30" max="180" step="15" value="60">
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
     </main>
@@ -1409,8 +1936,16 @@ String WebServerManager::generateSettingsPage() {
                 document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
                 tab.classList.add('active');
                 document.getElementById(tab.dataset.tab).classList.add('active');
+                // Load system info when Settings tab is opened
+                if (tab.dataset.tab === 'settings') loadSystemInfo();
             });
         });
+
+        // Accordion toggle
+        function toggleAccordion(name) {
+            const acc = document.querySelector('[data-accordion="' + name + '"]');
+            if (acc) acc.classList.toggle('open');
+        }
 
         function showToast(msg, type = 'success') {
             document.querySelectorAll('.toast').forEach(t => t.remove());
@@ -1564,6 +2099,17 @@ String WebServerManager::generateSettingsPage() {
                 // Also load timezone from device settings
                 if (settings.device && settings.device.gmtOffsetHours !== undefined) {
                     document.getElementById('timezone-select').value = settings.device.gmtOffsetHours;
+                }
+
+                // Breathing/Wellness settings
+                if (settings.breathing) {
+                    document.getElementById('breathing-enabled').checked = settings.breathing.enabled;
+                    document.getElementById('breathing-sound-enabled').checked = settings.breathing.soundEnabled !== false;
+                    document.getElementById('breathing-start-hour').value = settings.breathing.startHour;
+                    document.getElementById('breathing-end-hour').value = settings.breathing.endHour;
+                    document.getElementById('breathing-interval').value = settings.breathing.intervalMinutes;
+                    document.getElementById('breathing-interval-val').textContent = settings.breathing.intervalMinutes + ' min';
+                    document.getElementById('breathing-schedule-card').style.opacity = settings.breathing.enabled ? '1' : '0.5';
                 }
             } catch (e) {
                 console.error('Failed to load settings:', e);
@@ -1762,6 +2308,108 @@ String WebServerManager::generateSettingsPage() {
             } catch (e) { showToast('Failed', 'error'); }
         }
 
+        // OTA Upload
+        const otaDropzone = document.getElementById('ota-dropzone');
+        const otaFileInput = document.getElementById('ota-file');
+        const otaProgress = document.getElementById('ota-progress');
+        const otaFill = document.getElementById('ota-fill');
+        const otaStatus = document.getElementById('ota-status');
+
+        otaDropzone.addEventListener('click', () => otaFileInput.click());
+        otaDropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            otaDropzone.classList.add('dragover');
+        });
+        otaDropzone.addEventListener('dragleave', () => {
+            otaDropzone.classList.remove('dragover');
+        });
+        otaDropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            otaDropzone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                uploadFirmware(e.dataTransfer.files[0]);
+            }
+        });
+        otaFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                uploadFirmware(e.target.files[0]);
+            }
+        });
+
+        async function uploadFirmware(file) {
+            if (!file.name.endsWith('.bin')) {
+                showToast('Please select a .bin file', 'error');
+                return;
+            }
+            if (!confirm('Upload ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(2) + ' MB)?\\n\\nThe device will restart after update.')) {
+                return;
+            }
+
+            otaDropzone.classList.add('hidden');
+            otaProgress.classList.remove('hidden');
+            otaFill.style.width = '0%';
+            otaStatus.textContent = 'Uploading...';
+            otaStatus.className = 'ota-status';
+
+            try {
+                const response = await fetch('/api/ota/upload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/octet-stream' },
+                    body: file
+                });
+
+                if (response.ok) {
+                    otaFill.style.width = '100%';
+                    otaStatus.textContent = 'Update complete! Restarting...';
+                    otaStatus.classList.add('ota-success');
+                } else {
+                    const err = await response.text();
+                    throw new Error(err || 'Upload failed');
+                }
+            } catch (e) {
+                otaStatus.textContent = 'Error: ' + e.message;
+                otaStatus.classList.add('ota-error');
+                setTimeout(() => {
+                    otaDropzone.classList.remove('hidden');
+                    otaProgress.classList.add('hidden');
+                }, 3000);
+            }
+        }
+
+        async function loadSystemInfo() {
+            try {
+                const info = await fetch('/api/system/info').then(r => r.json());
+                document.getElementById('sys-version').textContent = info.version || '--';
+                document.getElementById('sys-build').textContent = info.buildDate || '--';
+                document.getElementById('sys-partition').textContent = info.partitionLabel || '--';
+                document.getElementById('sys-heap').textContent = info.freeHeap ? Math.round(info.freeHeap / 1024) + ' KB' : '--';
+                document.getElementById('sys-notes').textContent = info.releaseNotes || 'No release notes';
+                document.getElementById('btn-rollback').disabled = !info.canRollback;
+            } catch (e) {
+                console.error('Failed to load system info', e);
+            }
+        }
+
+        async function restartDevice() {
+            if (!confirm('Restart the device?')) return;
+            try {
+                await fetch('/api/system/restart', { method: 'POST' });
+                showToast('Restarting...');
+            } catch (e) {
+                showToast('Failed to restart', 'error');
+            }
+        }
+
+        async function rollbackFirmware() {
+            if (!confirm('Rollback to previous firmware?\\n\\nThe device will restart.')) return;
+            try {
+                await fetch('/api/system/rollback', { method: 'POST' });
+                showToast('Rolling back...');
+            } catch (e) {
+                showToast('Rollback failed', 'error');
+            }
+        }
+
         // Expression names (matching Expression enum order)
         const EXPRESSIONS = [
             'Neutral', 'Happy', 'Sad', 'Surprised', 'Angry', 'Suspicious',
@@ -1852,6 +2500,72 @@ String WebServerManager::generateSettingsPage() {
                 showToast(EXPRESSIONS[index]);
             } catch (e) {
                 showToast('Failed to preview', 'error');
+            }
+        }
+
+        // Breathing/Wellness
+        // Populate breathing hour selects
+        const breathingStartSel = document.getElementById('breathing-start-hour');
+        const breathingEndSel = document.getElementById('breathing-end-hour');
+        for (let i = 0; i < 24; i++) {
+            const optStart = document.createElement('option');
+            optStart.value = i;
+            optStart.textContent = i.toString().padStart(2, '0') + ':00';
+            breathingStartSel.appendChild(optStart);
+
+            const optEnd = document.createElement('option');
+            optEnd.value = i;
+            optEnd.textContent = i.toString().padStart(2, '0') + ':00';
+            breathingEndSel.appendChild(optEnd);
+        }
+        // Set defaults
+        breathingStartSel.value = 9;
+        breathingEndSel.value = 17;
+
+        // Breathing interval slider
+        const breathingIntervalEl = document.getElementById('breathing-interval');
+        breathingIntervalEl.addEventListener('input', (e) => {
+            document.getElementById('breathing-interval-val').textContent = e.target.value + ' min';
+            updateBreathingSetting('breathingIntervalMinutes', parseInt(e.target.value));
+        });
+
+        // Breathing enabled toggle
+        document.getElementById('breathing-enabled').addEventListener('change', (e) => {
+            updateBreathingSetting('breathingEnabled', e.target.checked);
+            document.getElementById('breathing-schedule-card').style.opacity = e.target.checked ? '1' : '0.5';
+        });
+
+        // Breathing sound toggle
+        document.getElementById('breathing-sound-enabled').addEventListener('change', (e) => {
+            updateBreathingSetting('breathingSoundEnabled', e.target.checked);
+        });
+
+        // Breathing hour selects
+        breathingStartSel.addEventListener('change', () => {
+            updateBreathingSetting('breathingStartHour', parseInt(breathingStartSel.value));
+        });
+        breathingEndSel.addEventListener('change', () => {
+            updateBreathingSetting('breathingEndHour', parseInt(breathingEndSel.value));
+        });
+
+        let breathingUpdateTimeout;
+        function updateBreathingSetting(key, value) {
+            clearTimeout(breathingUpdateTimeout);
+            breathingUpdateTimeout = setTimeout(() => {
+                fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ [key]: value })
+                });
+            }, 300);
+        }
+
+        async function startBreathing() {
+            try {
+                await fetch('/api/breathing/start', { method: 'POST' });
+                showToast('Breathing exercise started');
+            } catch (e) {
+                showToast('Failed to start breathing', 'error');
             }
         }
 

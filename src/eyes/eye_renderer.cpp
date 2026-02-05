@@ -267,8 +267,22 @@ void EyeRenderer::drawRoundedRect(uint16_t* buffer, int16_t x, int16_t y,
 
     // Convert normalized corner offsets to pixel values
     // Range is approximately ±15 pixels for full -1 to 1 range
+    //
+    // IMPORTANT: "Inner" means toward the nose (between eyes), "outer" means away from nose
+    // With 90° rotation, buffer Y maps to screen horizontal:
+    //   - Buffer Y=0 (normalizedY=0) = screen LEFT
+    //   - Buffer Y=h (normalizedY=1) = screen RIGHT
+    //
+    // For LEFT eye on screen:  inner=RIGHT side, outer=LEFT side → swap offsets
+    // For RIGHT eye on screen: inner=LEFT side, outer=RIGHT side → normal order
     float innerOffset = innerCornerY * 15.0f;
     float outerOffset = outerCornerY * 15.0f;
+    if (isLeftEye) {
+        // Swap inner/outer for left eye since its outer corner is on screen left
+        float temp = innerOffset;
+        innerOffset = outerOffset;
+        outerOffset = temp;
+    }
 
     // Determine if we need to use the complex geometry path
     bool hasPinch = (topPinch > 0.001f || bottomPinch > 0.001f);

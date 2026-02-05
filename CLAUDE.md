@@ -10,7 +10,71 @@ There are TWO folders/repos:
 1. **All edits happen in the private folder** (`robot-eyes/`)
 2. **ASK before any git commit or push** - Do not commit or push without user approval
 3. **Public folder is read-only** - Only sync from private when user requests
-4. To sync public: copy files from private (excluding `.git/`), then commit as single update
+4. To sync public: `rsync -av --delete --exclude='.git/' --exclude='releases/' robot-eyes/ robot-eyes-public/`
+   - Excludes `.git/` (keep public repo's own git history)
+   - Excludes `releases/` (binaries distributed via GitHub Releases instead)
+
+---
+
+## Firmware Versioning & Releases
+
+### Version File
+Version is defined in `include/version.h`:
+```cpp
+#define FIRMWARE_VERSION "1.0.0"
+#define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
+```
+
+### Semantic Versioning
+Use [SemVer](https://semver.org/): `MAJOR.MINOR.PATCH`
+- **MAJOR**: Breaking changes, major new features, architecture changes
+- **MINOR**: New features, backward-compatible enhancements
+- **PATCH**: Bug fixes, small improvements
+
+### Release Process
+When creating a new release:
+
+1. **Update version** in `include/version.h`
+2. **Build firmware**: `pio run`
+3. **Copy to releases**:
+   ```bash
+   cp .pio/build/esp32s3-amoled/firmware.bin releases/deskbuddy-vX.Y.Z.bin
+   ```
+4. **Update changelog** in `releases/CHANGELOG.md`:
+   - Add new version section at TOP (newest first)
+   - Use categories: Added, Changed, Fixed, Removed, Security
+   - Include date in `[X.Y.Z] - YYYY-MM-DD` format
+5. **Commit** with message: `Release vX.Y.Z - brief description`
+6. **Tag** (optional): `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
+
+### Release Directory Structure
+```
+releases/
+├── CHANGELOG.md           # Version history (newest at top)
+├── deskbuddy-v1.0.0.bin   # Current release
+├── deskbuddy-v0.9.0.bin   # Previous release
+└── ...
+```
+
+### Changelog Format
+```markdown
+## [X.Y.Z] - YYYY-MM-DD
+
+### Added
+- New features
+
+### Changed
+- Modifications to existing features
+
+### Fixed
+- Bug fixes
+
+### Removed
+- Removed features
+
+### Security
+- Security-related changes
+```
 
 ---
 
@@ -299,7 +363,20 @@ GET  /api/wifi/scan     // Returns array of {ssid, rssi, secure}
 POST /api/wifi/connect  // {ssid, password}
 POST /api/wifi/forget   // Clears credentials
 POST /api/wifi/disable  // Disables WiFi completely (sets wifiEnabled=false)
+GET  /api/system/info   // Version, build date, heap, partition info
+POST /api/ota/upload    // Upload firmware binary (Content-Type: application/octet-stream)
+GET  /api/ota/status    // OTA progress (state, progress, bytesReceived, totalBytes)
+POST /api/ota/cancel    // Abort OTA upload
+POST /api/system/restart   // Restart device
+POST /api/system/rollback  // Rollback to previous firmware
 ```
+
+**OTA Updates:**
+- Web UI System tab with drag-and-drop firmware upload
+- Uses ESP-IDF OTA APIs with dual-partition scheme (APP0/APP1)
+- Automatic rollback if new firmware fails to boot
+- `OtaManager` class in `src/network/ota_manager.h`
+- Version defined in `include/version.h`
 
 **NTP Time Sync:**
 - When WiFi connects, `wifiManager.syncNTP(gmtOffsetSec)` is called
@@ -334,7 +411,7 @@ webServer.setExpressionCallback(onWebExpressionPreview);
 
 - Dark theme: background `#0A0A0A`, foreground `#F2F2F2`, accent `#DFFF00` (neon yellow)
 - Fonts: JetBrains Mono (labels), Inter (body)
-- Tabbed navigation: Dashboard, Display, Audio, Time, WiFi, Pomodoro, Expressions
+- Tabbed navigation: Dashboard, Display, Audio, Time, WiFi, Pomodoro, Expressions, System
 - Settings sync via polling `/api/status` every 1 second
 - Color picker: 8 presets matching device `COLOR_PRESETS` array order
 - Dashboard shows: WiFi status, IP, Current Mood, Time, Uptime

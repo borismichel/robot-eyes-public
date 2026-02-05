@@ -66,7 +66,10 @@ AudioPlayer::AudioPlayer()
     , mp3(nullptr)
     , file(nullptr)
     , out(nullptr)
-    , taskRunning(false) {
+    , taskRunning(false)
+    , audioMutex(nullptr) {
+    // Create mutex for thread-safe access to mp3/file between cores
+    audioMutex = xSemaphoreCreateMutex();
 }
 
 AudioPlayer::~AudioPlayer() {
@@ -81,6 +84,12 @@ AudioPlayer::~AudioPlayer() {
     delete mp3;
     delete file;
     delete out;
+
+    // Delete the mutex
+    if (audioMutex) {
+        vSemaphoreDelete(audioMutex);
+        audioMutex = nullptr;
+    }
 }
 
 //=============================================================================
@@ -207,8 +216,20 @@ bool AudioPlayer::play(const char* filename) {
         return false;
     }
 
-    // Stop any current playback
-    stop();
+    // Acquire mutex to safely access mp3/file (shared with audio task on Core 0)
+    if (xSemaphoreTake(audioMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        Serial.println("AudioPlayer: Failed to acquire mutex for play");
+        return false;
+    }
+
+    // Stop any current playback (mutex already held)
+    if (mp3 && mp3->isRunning()) {
+        mp3->stop();
+    }
+    if (file) {
+        delete file;
+        file = nullptr;
+    }
 
     // Create new file source
     file = new AudioFileSourceLittleFS(filename);
@@ -216,6 +237,7 @@ bool AudioPlayer::play(const char* filename) {
         Serial.printf("AudioPlayer: Failed to open %s\n", filename);
         delete file;
         file = nullptr;
+        xSemaphoreGive(audioMutex);
         return false;
     }
 
@@ -224,9 +246,11 @@ bool AudioPlayer::play(const char* filename) {
         Serial.printf("AudioPlayer: Failed to start MP3 playback for %s\n", filename);
         delete file;
         file = nullptr;
+        xSemaphoreGive(audioMutex);
         return false;
     }
 
+    xSemaphoreGive(audioMutex);
     Serial.printf("AudioPlayer: Playing %s\n", filename);
     return true;
 }
@@ -235,6 +259,12 @@ bool AudioPlayer::play(const char* filename) {
  * @brief Stop current playback
  */
 void AudioPlayer::stop() {
+    // Acquire mutex to safely access mp3/file
+    if (xSemaphoreTake(audioMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        Serial.println("AudioPlayer: Failed to acquire mutex for stop");
+        return;
+    }
+
     if (mp3 && mp3->isRunning()) {
         mp3->stop();
     }
@@ -242,6 +272,8 @@ void AudioPlayer::stop() {
         delete file;
         file = nullptr;
     }
+
+    xSemaphoreGive(audioMutex);
 }
 
 /**
@@ -262,8 +294,14 @@ void AudioPlayer::update() {
  * @brief Internal update called from audio task
  *
  * Feeds the MP3 decoder until playback completes.
+ * Uses mutex to safely access mp3/file shared with main thread.
  */
 void AudioPlayer::taskUpdate() {
+    // Try to acquire mutex (non-blocking to avoid stalling audio task)
+    if (xSemaphoreTake(audioMutex, pdMS_TO_TICKS(5)) != pdTRUE) {
+        return;  // Main thread is using mp3/file, skip this iteration
+    }
+
     if (mp3 && mp3->isRunning()) {
         if (!mp3->loop()) {
             // Playback finished
@@ -275,6 +313,8 @@ void AudioPlayer::taskUpdate() {
             Serial.println("AudioPlayer: Playback finished");
         }
     }
+
+    xSemaphoreGive(audioMutex);
 }
 
 //=============================================================================

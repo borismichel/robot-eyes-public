@@ -19,6 +19,8 @@
 #define AUDIO_PLAYER_H
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 // Forward declarations
 class AudioGeneratorMP3;
@@ -129,6 +131,9 @@ private:
     AudioGeneratorMP3* mp3;         ///< MP3 decoder
     AudioFileSourceLittleFS* file;  ///< Current audio file
     AudioOutput* out;               ///< Audio output (uses I2SDuplex)
+
+    // Thread synchronization
+    SemaphoreHandle_t audioMutex;   ///< Mutex for mp3/file access between cores
 };
 
 #endif // AUDIO_PLAYER_H

@@ -80,6 +80,10 @@ enum class Expression {
     Squint,         ///< Both lids + stretch for intense squint
     Wink,           ///< One eye closed, playful (asymmetric)
 
+    // Breathing exercise
+    BreathingPrompt, ///< Alert eyes for breathing reminder
+    Relaxed,         ///< Calm, peaceful eyes after breathing exercise
+
     COUNT           ///< Number of expressions (for iteration)
 };
 
@@ -588,18 +592,47 @@ inline EyeShape squint() {
 inline EyeShape wink(bool isLeftEye) {
     EyeShape s;
     if (isLeftEye) {
-        // Left eye stays open
+        // Left eye stays open with slight smile
         s.height = 1.05f;
         s.topLid = 0.0f;
         s.outerCornerY = 0.1f;     // Slight smile
     } else {
-        // Right eye winks (closes)
-        s.height = 0.2f;
-        s.topLid = 0.8f;
-        s.bottomLid = 0.4f;
-        s.outerCornerY = 0.25f;    // Smile while winking
-        s.stretch = 0.9f;          // Slightly narrower
+        // Right eye winks - horizontal slit like ^_^ anime eyes
+        s.width = 0.15f;           // Thin vertical (becomes horizontal slit)
+        s.height = 0.75f;          // Wide horizontal
+        s.cornerRadius = 1.5f;     // Rounded ends for pill shape
+        s.outerCornerY = 0.15f;    // Slight upward tilt for happy wink
     }
+    return s;
+}
+
+/**
+ * @brief BreathingPrompt - Alert eyes for breathing reminder
+ *
+ * Slightly larger and rounder eyes to draw attention when
+ * the breathing exercise prompt appears.
+ */
+inline EyeShape breathingPrompt() {
+    EyeShape s;
+    s.width = 1.1f;            // Slightly larger
+    s.height = 1.1f;           // Slightly larger
+    s.cornerRadius = 1.2f;     // Rounder for soft appearance
+    return s;
+}
+
+/**
+ * @brief Relaxed - Calm, peaceful eyes after breathing
+ *
+ * Half-closed with soft curves, conveying deep relaxation
+ * and inner peace. Perfect for post-breathing state.
+ */
+inline EyeShape relaxed() {
+    EyeShape s;
+    s.height = 0.65f;          // Slightly closed
+    s.topLid = 0.25f;          // Gentle drooping top lid
+    s.topCurve = 0.3f;         // Soft curved top
+    s.bottomCurve = 0.15f;     // Gentle bottom curve
+    s.outerCornerY = 0.1f;     // Slight peaceful upturn
     return s;
 }
 
@@ -672,6 +705,10 @@ inline EyeShape getExpressionShape(Expression expr, bool isLeftEye) {
             return ExpressionPresets::squint();
         case Expression::Wink:
             return ExpressionPresets::wink(isLeftEye);
+        case Expression::BreathingPrompt:
+            return ExpressionPresets::breathingPrompt();
+        case Expression::Relaxed:
+            return ExpressionPresets::relaxed();
         case Expression::Neutral:
         default:
             return ExpressionPresets::neutral();
@@ -713,6 +750,8 @@ inline const char* getExpressionName(Expression expr) {
         case Expression::Skeptical:      return "Skeptical";
         case Expression::Squint:         return "Squint";
         case Expression::Wink:           return "Wink";
+        case Expression::BreathingPrompt: return "BreathingPrompt";
+        case Expression::Relaxed:        return "Relaxed";
         default:                         return "Unknown";
     }
 }

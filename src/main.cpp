@@ -23,6 +23,8 @@
 #include "network/wifi_manager.h"
 #include "network/web_server.h"
 #include "network/captive_portal.h"
+#include "network/ota_manager.h"
+#include "behavior/breathing_exercise.h"
 
 #define SCREEN_WIDTH  368
 #define SCREEN_HEIGHT 448
@@ -73,6 +75,8 @@ PomodoroTimer pomodoroTimer;
 WiFiManager wifiManager;
 WebServerManager webServer;
 CaptivePortal captivePortal;
+OtaManager otaManager;
+BreathingExercise breathingExercise;
 
 // Current expression
 Expression currentExpression = Expression::Neutral;
@@ -158,6 +162,10 @@ Expression expressionBeforePomodoro = Expression::Neutral;
 PomodoroState lastPomodoroState = PomodoroState::Idle;
 uint32_t lastPomodoroTick = 0;  // For tick sound timing
 int lastRenderedFilledLen = -1;  // Progress bar cache (prevents flicker)
+
+// Breathing exercise post-completion state
+uint32_t breathingContentUntil = 0;   // When Content phase ends (after exercise)
+uint32_t breathingRelaxedUntil = 0;   // When Relaxed phase ends (blocks other behaviors)
 bool needClearProgressBar = false;  // Clear progress bar edges when exiting pomodoro
 bool progressBarClearing = false;   // Animating progress bar clear
 uint32_t clearAnimStart = 0;        // When clear animation started
@@ -184,8 +192,10 @@ const uint32_t TIME_DISPLAY_DURATION = 3000;  // Show time for 3 seconds
 const uint32_t TIME_TICK_INTERVAL = 60000;    // Advance clock every 60 seconds
 
 // First-boot WiFi setup screen state
-bool isShowingWiFiSetup = false;        // True during first-boot setup screen
+bool isShowingWiFiSetup = false;        // True during first-boot WiFi info screen
+bool isShowingWiFiChoice = false;       // True during wifi/offline choice screen
 bool wifiSetupTouchWasActive = false;   // For detecting button taps
+int lastAPClientCount = 0;              // Track AP client count for detecting new connections
 bool wifiWasEnabled = true;             // Track WiFi enabled state for changes
 bool wifiWasConnected = false;          // Track WiFi connected state for NTP sync
 int8_t lastGmtOffsetHours = 0;          // Track timezone for NTP re-sync
@@ -370,6 +380,29 @@ bool readTouch() {
     uint8_t xl = Wire.read();
     uint8_t yh = Wire.read();
     uint8_t yl = Wire.read();
+
+    // If breathing exercise prompt is showing, handle Start/Skip buttons
+    if (breathingExercise.isShowingPrompt()) {
+        if (touchCount == 0 && wasTouching) {
+            // Touch released - check which button was tapped
+            // Screen is 416 wide (after rotation), left half = Start, right half = Skip
+            // After 90° CCW rotation: physical Y (0-448) maps to visual X (right-left inverted)
+            // Physical Y=0 → Visual Right, Physical Y=448 → Visual Left
+            int16_t rawY = ((yh & 0x0F) << 8) | yl;
+            Serial.printf("Breathing touch: rawY=%d (threshold=224)\n", rawY);
+            // Left half (rawY >= 224) = START, Right half (rawY < 224) = SKIP
+            if (rawY >= 224) {
+                breathingExercise.start();
+                Serial.println("Breathing: Start tapped (left half)");
+            } else {
+                breathingExercise.skip();
+                Serial.println("Breathing: Skip tapped (right half)");
+            }
+        }
+        isTouching = touchCount > 0;
+        wasTouching = isTouching;
+        return false;
+    }
 
     // If settings menu is open, let it handle touches
     if (settingsMenu.isOpen()) {
@@ -1105,6 +1138,248 @@ void renderPomodoroProgressBar(float progress, bool manageWrite = true, bool pro
     if (manageWrite) gfx->endWrite();
 }
 
+/**
+ * Render breathing progress bar frame around screen edge
+ * Similar to Pomodoro bar but with color pulsing support for HoldIn phase
+ *
+ * @param progress 0.0-1.0 how full the bar is
+ * @param pulseBlend 0.0-1.0 interpolates fill color: 0=eye color, 1=empty color (for pulsing)
+ * @param reverse if true, fill from the end instead of the start (for inhale counter-clockwise)
+ */
+void renderBreathingProgressBar(float progress, float pulseBlend = 0.0f, bool reverse = false) {
+    const int16_t screenW = LCD_WIDTH;
+    const int16_t screenH = LCD_HEIGHT;
+    const int16_t barThick = 16;
+    const int16_t cornerR = 42;
+
+    // Colors - interpolate fill color based on pulseBlend
+    uint16_t eyeColor = renderer.getColor();
+    uint16_t emptyColor = 0x2104;
+
+    // Extract RGB components
+    uint16_t r1 = (eyeColor >> 11) & 0x1F;
+    uint16_t g1 = (eyeColor >> 5) & 0x3F;
+    uint16_t b1 = eyeColor & 0x1F;
+
+    uint16_t r2 = (emptyColor >> 11) & 0x1F;
+    uint16_t g2 = (emptyColor >> 5) & 0x3F;
+    uint16_t b2 = emptyColor & 0x1F;
+
+    // Interpolate for fill color
+    uint16_t r = r1 + (int16_t)((r2 - r1) * pulseBlend);
+    uint16_t g = g1 + (int16_t)((g2 - g1) * pulseBlend);
+    uint16_t b = b1 + (int16_t)((b2 - b1) * pulseBlend);
+    uint16_t fillColor = (r << 11) | (g << 5) | b;
+
+    // Calculate segment lengths
+    int halfLeftLen = (screenH / 2) - cornerR;
+    int topLen = screenW - 2 * cornerR;
+    int rightLen = screenH - 2 * cornerR;
+    int bottomLen = screenW - 2 * cornerR;
+    int otherHalfLeftLen = screenH - (screenH / 2) - cornerR;
+    int cornerLen = (int)(1.57f * cornerR);
+    int totalLen = halfLeftLen + bottomLen + rightLen + topLen + otherHalfLeftLen + 4 * cornerLen;
+    int filledLen = (int)(progress * totalLen);
+
+    // For reverse mode, filled region is at the end instead of the start
+    int fillStart = reverse ? (totalLen - filledLen) : 0;
+    int fillEnd = reverse ? totalLen : filledLen;
+
+    gfx->startWrite();
+
+    int pos = 0;
+
+    float arcCenterR = cornerR - barThick / 2.0f;
+    int arcSteps = 8;
+    int arcCircleR = barThick / 2 + 3;
+
+    // Helper to check if a position should be filled
+    auto isFilled = [&](int p) -> bool {
+        return p >= fillStart && p < fillEnd;
+    };
+
+    // Helper to draw a corner arc with progressive coloring
+    auto drawCornerArc = [&](float startAngle, float endAngle, int16_t centerX, int16_t centerY,
+                              int cornerStartPos, int cornerLength) {
+        for (int i = 0; i < arcSteps; i++) {
+            float t = (float)i / (arcSteps - 1);
+            float angle = startAngle + (endAngle - startAngle) * t;
+            int16_t cx = centerX + (int16_t)(cosf(angle) * arcCenterR);
+            int16_t cy = centerY + (int16_t)(sinf(angle) * arcCenterR);
+            int circlePos = cornerStartPos + (int)(t * cornerLength);
+            uint16_t circleColor = isFilled(circlePos) ? fillColor : emptyColor;
+            gfx->fillCircle(cx, cy, arcCircleR, circleColor);
+        }
+    };
+
+    // Helper to draw a segment with fill region support
+    // Returns how many pixels are filled in a segment
+    auto getSegmentFill = [&](int segStart, int segEnd) -> std::pair<int, int> {
+        // Calculate overlap of [segStart, segEnd) with [fillStart, fillEnd)
+        int overlapStart = max(segStart, fillStart);
+        int overlapEnd = min(segEnd, fillEnd);
+        if (overlapStart >= overlapEnd) {
+            return {0, 0};  // No overlap
+        }
+        return {overlapStart - segStart, overlapEnd - overlapStart};
+    };
+
+    // Segment 1: Left edge, middle going down
+    {
+        int segStart = pos;
+        int segEnd = pos + halfLeftLen;
+        auto [fillOffset, fillPx] = getSegmentFill(segStart, segEnd);
+
+        if (fillPx == halfLeftLen) {
+            gfx->fillRect(0, screenH / 2, barThick, halfLeftLen, fillColor);
+        } else if (fillPx == 0) {
+            gfx->fillRect(0, screenH / 2, barThick, halfLeftLen, emptyColor);
+        } else {
+            // Three regions: before fill, fill, after fill
+            if (fillOffset > 0) {
+                gfx->fillRect(0, screenH / 2, barThick, fillOffset, emptyColor);
+            }
+            gfx->fillRect(0, screenH / 2 + fillOffset, barThick, fillPx, fillColor);
+            int afterFill = halfLeftLen - fillOffset - fillPx;
+            if (afterFill > 0) {
+                gfx->fillRect(0, screenH / 2 + fillOffset + fillPx, barThick, afterFill, emptyColor);
+            }
+        }
+        pos = segEnd;
+    }
+
+    // Segment 2: Bottom-left corner
+    {
+        int segStart = pos;
+        drawCornerArc(M_PI, M_PI / 2, cornerR, screenH - cornerR, segStart, cornerLen);
+        pos += cornerLen;
+    }
+
+    // Segment 3: Bottom edge
+    {
+        int segStart = pos;
+        int segEnd = pos + bottomLen;
+        auto [fillOffset, fillPx] = getSegmentFill(segStart, segEnd);
+
+        if (fillPx == bottomLen) {
+            gfx->fillRect(cornerR, screenH - barThick, bottomLen, barThick, fillColor);
+        } else if (fillPx == 0) {
+            gfx->fillRect(cornerR, screenH - barThick, bottomLen, barThick, emptyColor);
+        } else {
+            if (fillOffset > 0) {
+                gfx->fillRect(cornerR, screenH - barThick, fillOffset, barThick, emptyColor);
+            }
+            gfx->fillRect(cornerR + fillOffset, screenH - barThick, fillPx, barThick, fillColor);
+            int afterFill = bottomLen - fillOffset - fillPx;
+            if (afterFill > 0) {
+                gfx->fillRect(cornerR + fillOffset + fillPx, screenH - barThick, afterFill, barThick, emptyColor);
+            }
+        }
+        pos = segEnd;
+    }
+
+    // Segment 4: Bottom-right corner
+    {
+        int segStart = pos;
+        drawCornerArc(M_PI / 2, 0, screenW - cornerR, screenH - cornerR, segStart, cornerLen);
+        pos += cornerLen;
+    }
+
+    // Segment 5: Right edge (bottom to top)
+    {
+        int segStart = pos;
+        int segEnd = pos + rightLen;
+        int16_t edgeX = screenW - barThick;
+        int16_t bottomY = screenH - cornerR;  // Starting Y (bottom)
+        auto [fillOffset, fillPx] = getSegmentFill(segStart, segEnd);
+
+        if (fillPx == rightLen) {
+            gfx->fillRect(edgeX, cornerR, barThick, rightLen, fillColor);
+        } else if (fillPx == 0) {
+            gfx->fillRect(edgeX, cornerR, barThick, rightLen, emptyColor);
+        } else {
+            // Draw from bottom to top: empty at top, fill in middle, empty at bottom
+            // fillOffset = distance from bottom, fillPx = length of filled
+            int beforeFill = fillOffset;  // Empty portion at bottom
+            int afterFill = rightLen - fillOffset - fillPx;  // Empty portion at top
+
+            if (afterFill > 0) {
+                gfx->fillRect(edgeX, cornerR, barThick, afterFill, emptyColor);
+            }
+            gfx->fillRect(edgeX, cornerR + afterFill, barThick, fillPx, fillColor);
+            if (beforeFill > 0) {
+                gfx->fillRect(edgeX, bottomY - beforeFill, barThick, beforeFill, emptyColor);
+            }
+        }
+        pos = segEnd;
+    }
+
+    // Segment 6: Top-right corner
+    {
+        int segStart = pos;
+        drawCornerArc(0, -M_PI / 2, screenW - cornerR, cornerR, segStart, cornerLen);
+        pos += cornerLen;
+    }
+
+    // Segment 7: Top edge (right to left)
+    {
+        int segStart = pos;
+        int segEnd = pos + topLen;
+        int16_t rightX = screenW - cornerR;  // Starting X (right)
+        auto [fillOffset, fillPx] = getSegmentFill(segStart, segEnd);
+
+        if (fillPx == topLen) {
+            gfx->fillRect(cornerR, 0, topLen, barThick, fillColor);
+        } else if (fillPx == 0) {
+            gfx->fillRect(cornerR, 0, topLen, barThick, emptyColor);
+        } else {
+            // Draw from right to left: empty at left, fill in middle, empty at right
+            int beforeFill = fillOffset;  // Empty portion at right
+            int afterFill = topLen - fillOffset - fillPx;  // Empty portion at left
+
+            if (afterFill > 0) {
+                gfx->fillRect(cornerR, 0, afterFill, barThick, emptyColor);
+            }
+            gfx->fillRect(cornerR + afterFill, 0, fillPx, barThick, fillColor);
+            if (beforeFill > 0) {
+                gfx->fillRect(rightX - beforeFill, 0, beforeFill, barThick, emptyColor);
+            }
+        }
+        pos = segEnd;
+    }
+
+    // Segment 8: Top-left corner
+    {
+        int segStart = pos;
+        drawCornerArc(-M_PI / 2, -M_PI, cornerR, cornerR, segStart, cornerLen);
+        pos += cornerLen;
+    }
+
+    // Segment 9: Left edge, top to middle (top to bottom)
+    {
+        int segStart = pos;
+        int segEnd = pos + otherHalfLeftLen;
+        auto [fillOffset, fillPx] = getSegmentFill(segStart, segEnd);
+
+        if (fillPx == otherHalfLeftLen) {
+            gfx->fillRect(0, cornerR, barThick, otherHalfLeftLen, fillColor);
+        } else if (fillPx == 0) {
+            gfx->fillRect(0, cornerR, barThick, otherHalfLeftLen, emptyColor);
+        } else {
+            if (fillOffset > 0) {
+                gfx->fillRect(0, cornerR, barThick, fillOffset, emptyColor);
+            }
+            gfx->fillRect(0, cornerR + fillOffset, barThick, fillPx, fillColor);
+            int afterFill = otherHalfLeftLen - fillOffset - fillPx;
+            if (afterFill > 0) {
+                gfx->fillRect(0, cornerR + fillOffset + fillPx, barThick, afterFill, emptyColor);
+            }
+        }
+    }
+
+    gfx->endWrite();
+}
+
 void renderBreathingBars() {
     // Render two thin horizontal bars with breathing brightness
     float brightness = sleepBehavior.getBreathingBrightness();
@@ -1227,6 +1502,10 @@ void setup() {
     pomodoroTimer.begin();
     settingsMenu.setPomodoroTimer(&pomodoroTimer);
 
+    // Initialize breathing exercise and connect to settings menu
+    breathingExercise.begin();
+    settingsMenu.setBreathingExercise(&breathingExercise);
+
     // Apply initial settings from saved preferences
     audioPlayer.setVolume(settingsMenu.getVolume());
     gfx->setBrightness((settingsMenu.getBrightness() * 255) / 100);
@@ -1263,11 +1542,15 @@ void setup() {
         }
     }
 
+    // Initialize OTA manager (validates boot partition)
+    otaManager.begin();
+
     // Start web server (works in both AP and STA mode)
-    webServer.begin(&settingsMenu, &pomodoroTimer, &wifiManager);
+    webServer.begin(&settingsMenu, &pomodoroTimer, &wifiManager, &otaManager);
     webServer.setExpressionCallback(onWebExpressionPreview);
     webServer.setAudioTestCallback(onWebAudioTest);
     webServer.setMoodGetterCallback(getCurrentMood);
+    webServer.setBreathingExercise(&breathingExercise);
 
     // Initialize gaze tweeners
     gazeX.setSmoothTime(0.15f);
@@ -1397,8 +1680,8 @@ void loop() {
         lastTimeTick = now;
         settingsMenu.tickMinute();
 
-        // Trigger time display (unless menu is open or sleeping)
-        if (!settingsMenu.isOpen() && !sleepBehavior.isSleeping()) {
+        // Trigger time display (unless menu is open, sleeping, or breathing exercise active)
+        if (!settingsMenu.isOpen() && !sleepBehavior.isSleeping() && !breathingExercise.needsFullScreenRender()) {
             isShowingTime = true;
             timeDisplayStart = now;
             Serial.printf("Showing time: %02d:%02d\n",
@@ -1512,6 +1795,9 @@ void loop() {
     bool pomodoroChanged = pomodoroTimer.update(deltaTime);
     PomodoroState pomodoroState = pomodoroTimer.getState();
 
+    // Inform breathing exercise about pomodoro state (don't trigger reminders during active pomodoro)
+    breathingExercise.setPomodoroActive(pomodoroTimer.isActive());
+
     // Handle pomodoro state changes
     if (pomodoroState != lastPomodoroState) {
         // Reset progress bar cache on any state change (forces redraw)
@@ -1601,6 +1887,102 @@ void loop() {
                 audioPlayer.play("/tick.mp3");
             } else {
                 Serial.printf("Tick skipped (audio busy): %lu seconds\n", remaining);
+            }
+        }
+    }
+
+    // Update breathing exercise
+    bool breathingChanged = breathingExercise.update(deltaTime,
+                                                      settingsMenu.getTimeHour(),
+                                                      settingsMenu.getTimeMinute());
+    // Also check for external state changes (from triggerNow, start, skip)
+    if (breathingExercise.consumeExternalStateChange()) {
+        breathingChanged = true;
+    }
+    // Reset blink state when breathing becomes active to prevent mid-blink artifacts
+    if (breathingChanged && breathingExercise.isActive()) {
+        isBlinking = false;
+        blinkProgress = 0;
+    }
+    // Track tick timing for breathing atmosphere
+    static uint32_t lastBreathingTickTime = 0;
+    // Track breathing completion for delayed happy sound/content animation
+    static uint32_t breathingCompleteTime = 0;
+    static bool breathingCompletePending = false;
+
+    if (breathingChanged && breathingExercise.isSoundEnabled()) {
+        // Play sounds on state transitions
+        BreathingState breathState = breathingExercise.getState();
+        switch (breathState) {
+            case BreathingState::ShowingPrompt:
+                if (!audioPlayer.isPlaying()) {
+                    audioPlayer.play("/breathe_reminder.mp3");
+                }
+                break;
+            case BreathingState::Confirmation:
+                // Silent - let "Let's Breathe" fade in peacefully
+                break;
+            case BreathingState::Inhale:
+            case BreathingState::HoldIn:
+            case BreathingState::Exhale:
+            case BreathingState::HoldOut:
+                // Play tick on phase transition (text on screen makes transitions obvious)
+                audioPlayer.play("/tick.mp3");
+                lastBreathingTickTime = now;  // Reset tick timer on phase change
+                break;
+            case BreathingState::Complete:
+                // Mark completion time - wait 1 second before happy sound/content animation
+                breathingCompleteTime = now;
+                breathingCompletePending = true;
+                break;
+            default:
+                break;
+        }
+    }
+
+    // Handle delayed breathing completion: Content (3s) -> Relaxed (60s)
+    // breathingContentUntil and breathingRelaxedUntil are file-scope vars
+
+    // Start Content phase 1 second after breathing completes
+    if (breathingCompletePending && now - breathingCompleteTime >= 1000) {
+        breathingCompletePending = false;
+        setExpression(Expression::Content);
+        joyBouncePhase = 0.0f;  // Reset bounce for content animation
+        breathingContentUntil = now + 3000;  // Show Content for 3 seconds
+        if (breathingExercise.isSoundEnabled() && !audioPlayer.isPlaying()) {
+            audioPlayer.play("/happy.mp3");
+        }
+        Serial.println("[Breathing] Complete - showing Content expression for 3s");
+    }
+
+    // Transition from Content to Relaxed after 3 seconds
+    if (breathingContentUntil > 0 && now >= breathingContentUntil) {
+        breathingContentUntil = 0;
+        setExpression(Expression::Relaxed);
+        breathingRelaxedUntil = now + 60000;  // Show Relaxed for 60 seconds
+        Serial.println("[Breathing] Transitioning to Relaxed for 60s");
+    }
+
+    // End Relaxed animation after duration
+    if (breathingRelaxedUntil > 0 && now >= breathingRelaxedUntil) {
+        breathingRelaxedUntil = 0;
+        setExpression(Expression::Neutral);
+        Serial.println("[Breathing] Relaxed animation ended");
+    }
+
+    // Play tick sounds every second during active breathing phases
+    // Pattern: tick on transition + tick every 1s (5 ticks per 5s phase)
+    if (breathingExercise.isSoundEnabled() && breathingExercise.isActive()) {
+        BreathingState breathState = breathingExercise.getState();
+        // Only tick during the 4 main breathing phases (not Complete)
+        if (breathState == BreathingState::Inhale ||
+            breathState == BreathingState::HoldIn ||
+            breathState == BreathingState::Exhale ||
+            breathState == BreathingState::HoldOut) {
+
+            if (now - lastBreathingTickTime >= 1000 && !audioPlayer.isPlaying()) {
+                audioPlayer.play("/tick.mp3");
+                lastBreathingTickTime = now;
             }
         }
     }
@@ -1714,8 +2096,9 @@ void loop() {
         gfx->setBrightness(baseBrightness);
     }
 
-    // Handle yawn behavior (30-40 min idle)
-    if (idle.shouldYawn() && !isPetted && !isImuReacting && !showingIrritated && !showingJoy) {
+    // Handle yawn behavior (30-40 min idle) - not during breathing relaxed state
+    if (idle.shouldYawn() && !isPetted && !isImuReacting && !showingIrritated && !showingJoy &&
+        breathingRelaxedUntil == 0 && breathingContentUntil == 0) {
         preGestureExpression = currentExpression;
         setExpression(Expression::Yawn);
         isImuReacting = true;  // Reuse for recovery timing
@@ -1726,9 +2109,11 @@ void loop() {
         Serial.println("Yawn triggered (sound disabled)");
     }
 
-    // Handle random joy behavior (every 10-30 minutes when idle, not during pomodoro)
+    // Handle random joy behavior (every 10-30 minutes when idle, not during pomodoro or breathing)
     if (!showingJoy && now >= nextJoyTime && !sleepBehavior.isSleeping() && !sleepBehavior.isDrowsy() &&
-        !isPetted && !isImuReacting && !showingIrritated && !showingLove && !pomodoroTimer.isActive()) {
+        !isPetted && !isImuReacting && !showingIrritated && !showingLove && !pomodoroTimer.isActive() &&
+        !breathingExercise.needsFullScreenRender() &&
+        breathingRelaxedUntil == 0 && breathingContentUntil == 0) {
         // Trigger joy!
         expressionBeforeJoy = currentExpression;
         setExpression(Expression::Joy);
@@ -1755,8 +2140,9 @@ void loop() {
         }
     }
 
-    // Update Content bounce animation (for pomodoro breaks)
-    if (currentExpression == Expression::Content && pomodoroTimer.isActive()) {
+    // Update bounce animation for Content (pomodoro or breathing) or Relaxed (breathing)
+    if ((currentExpression == Expression::Content && (pomodoroTimer.isActive() || breathingContentUntil > 0)) ||
+        (currentExpression == Expression::Relaxed && breathingRelaxedUntil > 0)) {
         joyBouncePhase += deltaTime * 3.0f;  // Same bounce rate as Joy
     }
 
@@ -1769,11 +2155,13 @@ void loop() {
     // Micro-Expression Behavior (random idle personality moments)
     //=========================================================================
 
-    // Trigger random micro-expression
+    // Trigger random micro-expression (not during breathing exercise or relaxed state)
     if (!microExprActive && now >= nextMicroExprTime && !sleepBehavior.isSleeping() &&
         !sleepBehavior.isDrowsy() && !isPetted && !isImuReacting &&
         !showingIrritated && !showingLove && !showingJoy &&
-        !debugExpressionActive && currentExpression == Expression::Neutral) {
+        !debugExpressionActive && currentExpression == Expression::Neutral &&
+        !breathingExercise.needsFullScreenRender() &&
+        breathingRelaxedUntil == 0 && breathingContentUntil == 0) {
         triggerRandomMicroExpression();
         // Schedule next micro-expression
         nextMicroExprTime = now + MICRO_EXPR_MIN_INTERVAL +
@@ -1835,14 +2223,20 @@ void loop() {
     }
 
     // Determine current render mode for full-screen clear on transitions
-    // Modes: 0=eyes, 1=menu, 2=countdown, 3=sleep, 4=timeDisplay, 5=wifiSetup
+    // Modes: 0=eyes, 1=menu, 2=countdown, 3=sleep, 4=timeDisplay, 5=wifiSetup, 6=breathingPrompt, 7=breathingActive, 8=wifiChoice
     int currentRenderMode = 0;  // Default: eyes
     if (isShowingWiFiSetup) {
-        currentRenderMode = 5;  // wifiSetup (first-boot setup screen with buttons)
+        currentRenderMode = 5;  // wifiSetup (first-boot info screen)
+    } else if (isShowingWiFiChoice) {
+        currentRenderMode = 8;  // wifiChoice (wifi/offline choice screen)
     } else if (sleepBehavior.isSleeping()) {
         currentRenderMode = 3;  // sleep
     } else if (settingsMenu.isOpen()) {
         currentRenderMode = 1;  // menu
+    } else if (breathingExercise.isShowingPrompt() || breathingExercise.isInConfirmation()) {
+        currentRenderMode = 6;  // breathingPrompt or confirmation
+    } else if (breathingExercise.isActive()) {
+        currentRenderMode = 7;  // breathing exercise active (eye animation)
     } else if (pomodoroTimer.isActive() &&
                pomodoroState != PomodoroState::Celebration &&
                pomodoroState != PomodoroState::WaitingForTap &&
@@ -1872,8 +2266,32 @@ void loop() {
         lastRenderedFilledLen = -1;  // Force progress bar redraw
     }
 
-    // First-boot WiFi setup screen with "Configure WiFi" and "Use Offline" buttons
+    // First-boot WiFi info screen (shows SSID, password, IP)
+    // Waits for a client to connect to AP before showing choice screen
     if (isShowingWiFiSetup) {
+        // Check if a client has connected to the AP
+        int currentAPClients = WiFi.softAPgetStationNum();
+        if (currentAPClients > lastAPClientCount) {
+            Serial.printf("AP client connected! (%d clients) - showing choice screen\n", currentAPClients);
+            isShowingWiFiSetup = false;
+            isShowingWiFiChoice = true;
+            needFullScreenClear = true;
+        }
+        lastAPClientCount = currentAPClients;
+
+        // Render first-boot WiFi info screen
+        settingsMenu.renderFirstBootSetup(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                          renderer.getColor());
+        gfx->startWrite();
+        gfx->draw16bitRGBBitmap(leftEyePos.bufX, leftEyePos.bufY,
+                                eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT);
+        gfx->endWrite();
+        return;
+    }
+
+    // WiFi choice screen with "Configure WiFi" and "Use Offline" buttons
+    // Shown after user connects to AP
+    if (isShowingWiFiChoice) {
         // Handle touch for button selection
         // Screen is 336x416 (buffer coords), split into two button regions
         // Top half (y < 208): "Configure WiFi"
@@ -1887,21 +2305,43 @@ void loop() {
             if (effectiveY < COMBINED_BUF_HEIGHT / 2) {
                 // Top half - Configure WiFi
                 Serial.println("Configure WiFi selected - keeping AP mode for setup");
-                isShowingWiFiSetup = false;
+                isShowingWiFiChoice = false;
                 needFullScreenClear = true;
             } else {
                 // Bottom half - Use Offline
                 Serial.println("Use Offline selected - eyes will show, AP stays running");
                 settingsMenu.setOfflineModeConfigured(true);
-                isShowingWiFiSetup = false;
+                isShowingWiFiChoice = false;
                 needFullScreenClear = true;
             }
         }
         wifiSetupTouchWasActive = isTouching;
 
-        // Render first-boot setup screen
-        settingsMenu.renderFirstBootSetup(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
-                                          renderer.getColor());
+        // Render WiFi choice screen
+        settingsMenu.renderWiFiChoiceScreen(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                            renderer.getColor());
+        gfx->startWrite();
+        gfx->draw16bitRGBBitmap(leftEyePos.bufX, leftEyePos.bufY,
+                                eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT);
+        gfx->endWrite();
+        return;
+    }
+
+    // If breathing exercise prompt is showing, render it
+    if (breathingExercise.isShowingPrompt()) {
+        breathingExercise.renderPromptScreen(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                              renderer.getColor());
+        gfx->startWrite();
+        gfx->draw16bitRGBBitmap(leftEyePos.bufX, leftEyePos.bufY,
+                                eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT);
+        gfx->endWrite();
+        return;
+    }
+
+    // If breathing confirmation screen is showing ("Let's Breathe")
+    if (breathingExercise.isInConfirmation()) {
+        breathingExercise.renderConfirmationScreen(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                                    renderer.getColor());
         gfx->startWrite();
         gfx->draw16bitRGBBitmap(leftEyePos.bufX, leftEyePos.bufY,
                                 eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT);
@@ -1996,11 +2436,15 @@ void loop() {
     // Note: needFullBlitAfterTime is handled in the rendering section below
     // to ensure full screen blit clears time display artifacts
 
-    // Update blink animation
-    updateBlink();
+    // Update blink animation (disabled during breathing exercise for focus)
+    if (!breathingExercise.isActive()) {
+        updateBlink();
+    }
 
-    // Update gaze
-    updateGaze();
+    // Update gaze (disabled during breathing exercise for focus)
+    if (!breathingExercise.isActive()) {
+        updateGaze();
+    }
 
     // Build target shapes from base expression + dynamic state
     float openness = getBlinkOpenness();
@@ -2027,49 +2471,62 @@ void loop() {
     rightEyeTarget.offsetX += totalGazeX;
     rightEyeTarget.offsetY += totalGazeY;
 
-    // Petting bobbing effect: gently oscillate lid closure
-    if (isPetted) {
-        // Bob between topLid 0.35 and 0.55 (centered around 0.45)
-        float bobAmount = 0.1f * sinf(pettingPulsePhase * 2.0f * PI);
-        leftEyeTarget.topLid += bobAmount;
-        rightEyeTarget.topLid += bobAmount;
+    // Override with breathing exercise shapes when active
+    // During breathing, skip ALL other eye modifications for complete focus
+    if (breathingExercise.isActive()) {
+        EyeShape breathShape;
+        breathingExercise.getTargetShape(breathShape);
+        leftEyeTarget = breathShape;
+        rightEyeTarget = breathShape;
+        // Skip all other eye modifications
+    } else {
+        // Apply all other eye modifications only when NOT in breathing exercise
+
+        // Petting bobbing effect: gently oscillate lid closure
+        if (isPetted) {
+            // Bob between topLid 0.35 and 0.55 (centered around 0.45)
+            float bobAmount = 0.1f * sinf(pettingPulsePhase * 2.0f * PI);
+            leftEyeTarget.topLid += bobAmount;
+            rightEyeTarget.topLid += bobAmount;
+        }
+
+        // Apply time-of-day mood lid offset (heavier lids at night)
+        if (moodModifiers.baseLidOffset > 0.0f && !isPetted && !sleepBehavior.isDrowsy()) {
+            leftEyeTarget.topLid += moodModifiers.baseLidOffset;
+            rightEyeTarget.topLid += moodModifiers.baseLidOffset;
+        }
+
+        // Side-looking squint effect: eye in direction of gaze narrows, opposite widens
+        // totalGazeY: positive = looking toward right eye, negative = toward left eye
+        float squintAmount = totalGazeY * 0.25f;  // Subtle effect
+        leftEyeTarget.height *= (1.0f + squintAmount);   // Widen when looking down (toward right)
+        rightEyeTarget.height *= (1.0f - squintAmount);  // Narrow when looking down
+        // Add slight lid closure to the narrowing eye
+        if (squintAmount > 0.1f) {
+            rightEyeTarget.topLid += squintAmount * 0.3f;
+        } else if (squintAmount < -0.1f) {
+            leftEyeTarget.topLid += (-squintAmount) * 0.3f;
+        }
+
+        // Micro-expression animation effects (for animation-based types)
+        if (microExprActive) {
+            // Apply gaze offset for animation-based micro-expressions
+            float microGazeX = 0, microGazeY = 0;
+            getMicroExprGazeOffset(microGazeX, microGazeY);
+            leftEyeTarget.offsetX += microGazeX;
+            leftEyeTarget.offsetY += microGazeY;
+            rightEyeTarget.offsetX += microGazeX;
+            rightEyeTarget.offsetY += microGazeY;
+
+            // Apply openness modifier for wink/sigh
+            float leftOpenness = getMicroExprOpenness(true);
+            float rightOpenness = getMicroExprOpenness(false);
+            leftEyeTarget.openness *= leftOpenness;
+            rightEyeTarget.openness *= rightOpenness;
+        }
     }
 
-    // Apply time-of-day mood lid offset (heavier lids at night)
-    if (moodModifiers.baseLidOffset > 0.0f && !isPetted && !sleepBehavior.isDrowsy()) {
-        leftEyeTarget.topLid += moodModifiers.baseLidOffset;
-        rightEyeTarget.topLid += moodModifiers.baseLidOffset;
-    }
-
-    // Side-looking squint effect: eye in direction of gaze narrows, opposite widens
-    // totalGazeY: positive = looking toward right eye, negative = toward left eye
-    float squintAmount = totalGazeY * 0.25f;  // Subtle effect
-    leftEyeTarget.height *= (1.0f + squintAmount);   // Widen when looking down (toward right)
-    rightEyeTarget.height *= (1.0f - squintAmount);  // Narrow when looking down
-    // Add slight lid closure to the narrowing eye
-    if (squintAmount > 0.1f) {
-        rightEyeTarget.topLid += squintAmount * 0.3f;
-    } else if (squintAmount < -0.1f) {
-        leftEyeTarget.topLid += (-squintAmount) * 0.3f;
-    }
-
-    // Micro-expression animation effects (for animation-based types)
-    if (microExprActive) {
-        // Apply gaze offset for animation-based micro-expressions
-        float microGazeX = 0, microGazeY = 0;
-        getMicroExprGazeOffset(microGazeX, microGazeY);
-        leftEyeTarget.offsetX += microGazeX;
-        leftEyeTarget.offsetY += microGazeY;
-        rightEyeTarget.offsetX += microGazeX;
-        rightEyeTarget.offsetY += microGazeY;
-
-        // Apply openness modifier for wink/sigh
-        float leftOpenness = getMicroExprOpenness(true);
-        float rightOpenness = getMicroExprOpenness(false);
-        leftEyeTarget.openness *= leftOpenness;
-        rightEyeTarget.openness *= rightOpenness;
-    }
-
+    // Apply tweeners
     // Set targets on tweeners
     leftEyeTweener.setTarget(leftEyeTarget);
     rightEyeTweener.setTarget(rightEyeTarget);
@@ -2140,26 +2597,92 @@ void loop() {
             needFullBlit = true;
         }
 
-        // Normal eye rendering with optional bounce animation (Joy, Content, or Petting)
+        // Check if we're in active breathing phase (Inhale/HoldIn/Exhale/HoldOut)
+        // During these phases, show large centered text instead of eyes
+        BreathingState breathState = breathingExercise.getState();
+        bool inBreathingPhase = (breathState == BreathingState::Inhale ||
+                                 breathState == BreathingState::HoldIn ||
+                                 breathState == BreathingState::Exhale ||
+                                 breathState == BreathingState::HoldOut);
+
+        // Calculate eye positions (needed for dirty rects even during breathing)
         int16_t bounceOffset = 0;
         bool shouldBounce = showingJoy || isPetted ||
-            (currentExpression == Expression::Content && pomodoroTimer.isActive());
+            (currentExpression == Expression::Content && (pomodoroTimer.isActive() || breathingContentUntil > 0)) ||
+            (currentExpression == Expression::Relaxed && breathingRelaxedUntil > 0);
         if (shouldBounce) {
             // Bounce up and down (sin oscillates -1 to +1), 15px amplitude each direction
             bounceOffset = (int16_t)(sinf(joyBouncePhase * 2.0f * PI) * 15.0f);
         }
-
         int16_t leftCX = leftEyePos.baseX - bounceOffset;
         int16_t rightCX = rightEyePos.baseX - bounceOffset;
 
-        renderer.renderToBuf(leftEye, eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
-                             leftCX, leftEyePos.baseY, true, false);
-        renderer.renderToBuf(rightEye, eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
-                             rightCX, rightEyePos.baseY, false, false);
-
-        // Compute current eye bounding boxes
+        // Compute eye bounding boxes (before render, for dirty tracking)
         DirtyRect curLeftRect = computeEyeRect(leftEye, leftCX, leftEyePos.baseY);
         DirtyRect curRightRect = computeEyeRect(rightEye, rightCX, rightEyePos.baseY);
+
+        if (inBreathingPhase) {
+            // Full-screen breathing text (replaces eyes)
+            breathingExercise.renderPhaseText(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                               renderer.getColor());
+            // Use safe region blit to avoid overwriting progress bar corners
+            // Same approach as Pomodoro countdown
+            needFullBlit = false;  // We'll handle blit specially below
+
+            // Invalidate eye rects so next frame after breathing does full clear
+            prevLeftRect.valid = false;
+            prevRightRect.valid = false;
+
+            // Calculate breathing progress bar parameters
+            BreathingState breathState = breathingExercise.getState();
+            float barProgress = 0.0f;
+            float pulseBlend = 0.0f;
+            bool reverseDir = false;
+            float phaseProgress = breathingExercise.getPhaseProgress();
+
+            switch (breathState) {
+                case BreathingState::Inhale:
+                    barProgress = phaseProgress;
+                    reverseDir = true;
+                    pulseBlend = 0.7f * (1.0f - phaseProgress);
+                    break;
+                case BreathingState::HoldIn:
+                    barProgress = 1.0f;
+                    pulseBlend = 0.5f + 0.5f * sinf(millis() * 0.002f);
+                    break;
+                case BreathingState::Exhale:
+                    barProgress = 1.0f - phaseProgress;
+                    pulseBlend = 0.7f * phaseProgress;
+                    break;
+                case BreathingState::HoldOut:
+                    barProgress = 0.0f;
+                    pulseBlend = 0.7f;
+                    break;
+                default:
+                    break;
+            }
+
+            // Draw progress bar first, then blit only the safe central region
+            // This prevents the buffer from overlapping the 42px rounded corners
+            const int16_t cornerMargin = 42 - 16;  // 26px offset from buffer edge
+            const int16_t safeW = COMBINED_BUF_WIDTH - 2 * cornerMargin;
+            const int16_t safeH = COMBINED_BUF_HEIGHT - 2 * cornerMargin;
+
+            gfx->startWrite();
+            renderBreathingProgressBar(barProgress, pulseBlend, reverseDir);
+            // Blit only the safe central region that doesn't overlap corners
+            DirtyRect safeRegion = {cornerMargin, cornerMargin, safeW, safeH, true};
+            blitRegion(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                       leftEyePos.bufX, leftEyePos.bufY, safeRegion, false);
+            gfx->endWrite();
+            return;  // Skip normal blit path
+        } else {
+            // Normal eye rendering
+            renderer.renderToBuf(leftEye, eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                 leftCX, leftEyePos.baseY, true, false);
+            renderer.renderToBuf(rightEye, eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                 rightCX, rightEyePos.baseY, false, false);
+        }
 
         // Animate progress bar clearing (when exiting pomodoro mode)
         if (progressBarClearing) {
