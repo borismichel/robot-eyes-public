@@ -9,11 +9,12 @@ Expressive robot eyes for ESP32-S3 with AMOLED display, inspired by Anki's Cozmo
 ## Features
 
 ### Expressions & Animation
-- **30 emotion presets** with smooth transitions (0.08s-0.35s)
+- **32 emotion presets** with smooth transitions (0.08s-0.35s)
 - **Core**: Neutral, Happy, Sad, Surprised, Angry, Sleepy, Scared, Confused, Focused, Joyful
 - **Special shapes**: Heart (Love), Star (Dizzy), Spiral (Dazed), Crescents (Joy)
 - **Personality**: Curious, Thinking, Mischievous, Bored, Smug, Dreamy, Skeptical
 - **Asymmetric**: Suspicious, Confused, Wink for added character
+- **Breathing**: BreathingPrompt, Relaxed for mindfulness exercises
 - **Idle behavior**: Random gaze scanning, micro-movements, natural blinking
 
 ### Interaction
@@ -45,6 +46,14 @@ Expressive robot eyes for ESP32-S3 with AMOLED display, inspired by Anki's Cozmo
 - **Visual**: Large countdown + 16px progress bar frame (depletes clockwise)
 - **Audio**: Optional tick sound in last 60 seconds
 - **Configurable**: Work (1-60 min), breaks (1-60 min), sessions (1-8)
+
+### Breathing Exercise
+- **Box breathing**: 5-5-5-5 pattern (inhale, hold, exhale, hold)
+- **3 cycles** = 60 seconds total
+- **Visual**: Progress bar fills/empties with breath, phase text overlay (IN/HOLD/OUT)
+- **Scheduled reminders**: Configurable interval (1-8 hours), active hours
+- **Post-exercise**: Content (3s) → Relaxed (60s) calm-down animation
+- **Access**: Settings menu → Mindfulness, or web UI Productivity tab
 
 ### WiFi & Remote Control
 - **First boot**: Setup screen with "Configure WiFi" or "Use Offline" options
@@ -85,13 +94,14 @@ pio device monitor
 ```
 
 ### WiFi Setup
-1. On first boot, device shows setup screen with two options:
+1. On first boot, device shows WiFi info screen with SSID, password, and IP address
+2. Connect phone/computer to WiFi `DeskBuddy-Setup` (password: `deskbuddy`)
+3. Device detects your connection and shows choice screen:
    - **Configure WiFi**: Tap top half to proceed with WiFi setup
    - **Use Offline**: Tap bottom half to use without network (AP stays on for later config)
-2. Connect phone/computer to WiFi `DeskBuddy-Setup` (password: `deskbuddy`)
-3. Open `http://192.168.4.1` in browser
-4. Select your network and enter password
-5. Device connects automatically, access web UI at `http://deskbuddy.local`
+4. Open `http://192.168.4.1` in browser
+5. Select your network and enter password
+6. Device connects automatically, access web UI at `http://deskbuddy.local`
 
 **Offline Mode**: If you choose "Use Offline", eyes display normally but the AP remains running silently. You can still configure settings via web at any time by connecting to the AP.
 
@@ -104,11 +114,13 @@ pio device monitor
 ### On-Device Settings
 Open with 2-finger tap, swipe up/down to navigate:
 
-**Main Menu** → Pomodoro | Settings | Exit
+**Main Menu** → Pomodoro | Settings | Mindfulness | Exit
 
 **Pomodoro**: Start/Stop, Work duration, Short break, Long break, Sessions, Ticking, Back
 
 **Settings**: Volume, Brightness, Mic Gain, Mic Threshold, Eye Color (8 presets), Time, Time Format, Timezone, WiFi (on/off), Back
+
+**Mindfulness**: Breathe Now, Schedule (on/off), Interval (1-8 hours), Sound (on/off), Back
 
 ### Web Interface
 
@@ -119,24 +131,30 @@ Open with 2-finger tap, swipe up/down to navigate:
 | Audio | Volume, mic gain, mic threshold, test audio button |
 | Time | Hour/minute, 12H/24H toggle, timezone (GMT offset) |
 | WiFi | Status, scan networks, connect, forget, NTP sync status |
-| Pomodoro | Start/stop, all duration settings |
-| Expressions | Current mood indicator, grid of 30 buttons for live preview |
+| Productivity | Pomodoro settings, Breathing exercise settings |
+| Expressions | Current mood indicator, grid of 32 buttons for live preview |
+| System | Firmware version, OTA updates, restart, rollback |
 
 ### REST API
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/status` | GET | WiFi, pomodoro, time, uptime, currentMood |
-| `/api/settings` | GET/POST | All device settings (incl. gmtOffsetHours) |
-| `/api/expression` | POST | Preview expression (index: 0-29) |
+| `/api/settings` | GET/POST | All device settings (incl. breathing schedule) |
+| `/api/expression` | POST | Preview expression (index: 0-31) |
 | `/api/audio/test` | POST | Play test sound |
 | `/api/pomodoro/start` | POST | Start timer |
 | `/api/pomodoro/stop` | POST | Stop timer |
+| `/api/breathing/start` | POST | Start breathing exercise |
 | `/api/wifi/scan` | GET | Available networks |
 | `/api/wifi/connect` | POST | Connect (ssid, password) |
 | `/api/wifi/forget` | POST | Clear credentials |
 | `/api/wifi/disable` | POST | Disable WiFi completely |
 | `/api/time` | GET/POST | Device clock |
+| `/api/system/info` | GET | Firmware version, memory stats |
+| `/api/ota/upload` | POST | Upload firmware binary |
+| `/api/system/restart` | POST | Restart device |
+| `/api/system/rollback` | POST | Rollback to previous firmware |
 
 ---
 
@@ -146,15 +164,16 @@ Open with 2-finger tap, swipe up/down to navigate:
 src/
 ├── main.cpp                 # Application loop
 ├── eyes/                    # Parametric eye rendering
-├── behavior/                # Expressions, idle, sleep, mood
+├── behavior/                # Expressions, idle, sleep, mood, breathing
 ├── input/                   # IMU and audio handlers
 ├── audio/                   # MP3 playback
 ├── ui/                      # Settings menu, pomodoro
-├── network/                 # WiFi, web server, captive portal
+├── network/                 # WiFi, web server, captive portal, OTA
 └── animation/               # Tweening utilities
 
-data/                        # Audio files (happy, confused, yawn, tick)
+data/                        # Audio files (happy, confused, yawn, tick, breathe_reminder)
 lib/                         # Waveshare GFX, ES8311 driver
+include/                     # version.h, pin_config.h
 ```
 
 ---

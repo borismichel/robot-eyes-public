@@ -139,6 +139,14 @@ Despite being called "innerCornerY" and "outerCornerY", these are applied to buf
 float adjustedRX = (float)rx - rowYOffset;  // Applied to X, moves corners up/down on SCREEN
 ```
 
+**IMPORTANT:** Inner/outer corners are swapped for left eye due to screen rotation:
+- Left eye's "outer" corner is on screen LEFT (buffer Y=0)
+- Left eye's "inner" corner is on screen RIGHT (toward center)
+- Right eye's "inner" corner is on screen LEFT (toward center)
+- Right eye's "outer" corner is on screen RIGHT
+
+The `eye_renderer.cpp` swaps `innerOffset` and `outerOffset` when `isLeftEye=true`.
+
 ### Settings Menu Rotation
 Screen-to-buffer transformation for UI rendering (SCREEN_W=416, SCREEN_H=336):
 ```cpp
@@ -206,16 +214,24 @@ Hierarchical menu with main menu and sub-menus:
 - SETTINGS_PAGE_WIFI (8): Toggle WiFi on/off
 - SETTINGS_PAGE_BACK (9): Return to main menu
 
+**Mindfulness Sub-Menu (5 pages):**
+- MINDFUL_PAGE_BREATHE_NOW (0): Start breathing exercise now
+- MINDFUL_PAGE_SCHEDULE (1): Enable/disable scheduled reminders
+- MINDFUL_PAGE_INTERVAL (2): Hours between reminders (1-8)
+- MINDFUL_PAGE_SOUND (3): Toggle reminder sound
+- MINDFUL_PAGE_BACK (4): Return to main menu
+
 Navigation: Swipe up/down, tap to select/toggle
 Settings persisted via Preferences library
 
 ## Current Expression Count
 
-30 expressions total (as of Jan 2026):
+32 expressions total (as of Feb 2026):
 - Core: Neutral, Happy, Sad, Surprised, Angry, Suspicious, Sleepy, Scared, Content, Startled, Grumpy, Joyful, Focused, Confused, Yawn, ContentPetting
 - Special shapes: Dazed (swirl), Dizzy (star), Love (heart), Joy
 - Micro-expressions: Curious, Thinking, Mischievous, Bored, Alert
-- New (curve/stretch): Smug, Dreamy, Skeptical, Squint, Wink
+- Curve/stretch: Smug, Dreamy, Skeptical, Squint, Wink
+- Breathing: BreathingPrompt, Relaxed (for post-exercise calm state)
 
 ---
 
@@ -307,6 +323,61 @@ leftEye.topLid += moodMods.baseLidOffset;
 
 ---
 
+## Breathing Exercise
+
+Mindfulness feature in `src/behavior/breathing_exercise.h`:
+
+### State Machine
+
+```cpp
+enum class BreathingState {
+    Idle,           // Not active
+    ShowingPrompt,  // Prompt screen with Start/Skip buttons
+    Confirmation,   // 3-2-1 countdown before starting
+    Inhale,         // 5 second inhale
+    HoldIn,         // 5 second hold after inhale
+    Exhale,         // 5 second exhale
+    HoldOut,        // 5 second hold after exhale
+    Complete        // Exercise finished
+};
+```
+
+### Box Breathing Pattern
+- **4 phases**: Inhale (5s) → Hold (5s) → Exhale (5s) → Hold (5s)
+- **3 cycles** per session = 60 seconds total
+- **Progress bar**: Fills/empties in sync with breath phase
+- **Phase text**: "IN" / "HOLD" / "OUT" with fade animation
+
+### Post-Exercise Animation Flow
+1. Exercise completes
+2. Wait 1 second
+3. Content expression for 3 seconds
+4. Relaxed expression for 60 seconds (blocks other behaviors)
+5. Return to Neutral
+
+### Settings (Persisted)
+- `breathingScheduleEnabled` - Enable/disable reminders
+- `breathingIntervalHours` - Hours between reminders (1-8)
+- `breathingSoundEnabled` - Play reminder sound
+- `breathingStartHour` / `breathingEndHour` - Active hours (default 9-21)
+
+### Blocking Conditions
+Breathing reminders don't trigger during:
+- Active Pomodoro session
+- Sleep mode
+- Settings menu open
+
+### Key Functions
+```cpp
+breathingExercise.checkScheduledReminder()  // Called in main loop
+breathingExercise.startBreathingNow()       // Manual start
+breathingExercise.isActive()                // Currently breathing
+breathingExercise.needsFullScreenRender()   // Prompt or exercise showing
+breathingExercise.getBreathingPhase()       // For eye animation sync
+```
+
+---
+
 ## WiFi & Web Server
 
 Network module in `src/network/`:
@@ -330,10 +401,17 @@ enum class WiFiState {
 - IP: `192.168.4.1`
 - Connect timeout: 15 seconds
 
-**First Boot Flow:**
-1. Device shows setup screen with "Configure WiFi" / "Use Offline" buttons
-2. "Configure WiFi" → Eyes show, AP runs for web configuration
-3. "Use Offline" → Sets `offlineModeConfigured=true`, eyes show, AP runs silently
+**First Boot Flow (Two-Phase):**
+1. Device shows WiFi info screen: SSID (`DeskBuddy-Setup`), password (`deskbuddy`), IP (`192.168.4.1`)
+2. Screen waits until a client connects to the AP (detected via `WiFi.softAPgetStationNum()`)
+3. Once connected, device shows choice screen: "Configure WiFi" / "Use Offline" buttons
+4. "Configure WiFi" → Eyes show, AP runs for web configuration
+5. "Use Offline" → Sets `offlineModeConfigured=true`, eyes show, AP runs silently
+
+**Key state variables:**
+- `isShowingWiFiSetup` - True during WiFi info screen
+- `isShowingWiFiChoice` - True during choice screen (after AP client connects)
+- `lastAPClientCount` - Tracks AP client connections
 
 **WiFi Disable:**
 - Toggle via device settings menu (Settings → WiFi)
