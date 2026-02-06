@@ -2003,6 +2003,9 @@ String WebServerManager::generateSettingsPage() {
         .accordion.open .accordion-icon {
             transform: rotate(180deg);
         }
+        .tool-chevron.open {
+            transform: rotate(90deg);
+        }
         .accordion-content {
             display: none;
             padding: 20px;
@@ -2651,7 +2654,30 @@ String WebServerManager::generateSettingsPage() {
                     </div>
                     <div class="status-row">
                         <span class="status-row-label">Exposed Tools</span>
-                        <span class="status-row-value" id="mcp-tools-count">6</span>
+                        <span class="status-row-value">14</span>
+                    </div>
+                    <div style="margin-top: 12px;">
+                        <div class="form-label" style="cursor: pointer; user-select: none;" onclick="document.getElementById('tool-list').style.display = document.getElementById('tool-list').style.display === 'none' ? 'block' : 'none'; this.querySelector('.tool-chevron').classList.toggle('open');">
+                            <span>Available Tools <span class="tool-chevron" style="display: inline-block; transition: transform 0.2s; font-size: 10px;">&#9654;</span></span>
+                        </div>
+                        <div id="tool-list" style="display: none; margin-top: 8px; font-size: 12px; line-height: 1.6;">
+                            <div style="display: grid; gap: 6px;">
+                                <div><code style="color: var(--accent);">set_expression</code> <span style="color: var(--muted-foreground);">— Change facial expression (18 presets)</span></div>
+                                <div><code style="color: var(--accent);">set_timer</code> <span style="color: var(--muted-foreground);">— Start a countdown timer</span></div>
+                                <div><code style="color: var(--accent);">cancel_timer</code> <span style="color: var(--muted-foreground);">— Stop the current timer</span></div>
+                                <div><code style="color: var(--accent);">start_pomodoro</code> <span style="color: var(--muted-foreground);">— Start a Pomodoro work session</span></div>
+                                <div><code style="color: var(--accent);">stop_pomodoro</code> <span style="color: var(--muted-foreground);">— Stop the current Pomodoro</span></div>
+                                <div><code style="color: var(--accent);">get_device_info</code> <span style="color: var(--muted-foreground);">— Device status, settings, timers</span></div>
+                                <div><code style="color: var(--accent);">play_sound</code> <span style="color: var(--muted-foreground);">— Play a sound effect</span></div>
+                                <div><code style="color: var(--accent);">set_reminder</code> <span style="color: var(--muted-foreground);">— Create a timed reminder</span></div>
+                                <div><code style="color: var(--accent);">cancel_reminder</code> <span style="color: var(--muted-foreground);">— Remove a reminder by text</span></div>
+                                <div><code style="color: var(--accent);">list_reminders</code> <span style="color: var(--muted-foreground);">— List all active reminders</span></div>
+                                <div><code style="color: var(--accent);">start_breathing</code> <span style="color: var(--muted-foreground);">— Start box breathing exercise</span></div>
+                                <div><code style="color: var(--accent);">set_volume</code> <span style="color: var(--muted-foreground);">— Set speaker volume (0-100)</span></div>
+                                <div><code style="color: var(--accent);">set_brightness</code> <span style="color: var(--muted-foreground);">— Set screen brightness (0-100)</span></div>
+                                <div><code style="color: var(--accent);">set_eye_color</code> <span style="color: var(--muted-foreground);">— Change eye color preset</span></div>
+                            </div>
+                        </div>
                     </div>
                     <div style="margin-top: 16px;">
                         <div class="form-label"><span>Claude Desktop Config</span></div>
@@ -2730,6 +2756,7 @@ String WebServerManager::generateSettingsPage() {
 
         let lastSettingsVersion = -1;
         let failCount = 0;
+        let deviceIP = location.hostname;
 
         // Tab navigation
         document.querySelectorAll('.tab').forEach(tab => {
@@ -2792,6 +2819,8 @@ String WebServerManager::generateSettingsPage() {
                     document.getElementById('wifi-ssid').textContent = status.wifi.connected ? status.wifi.ssid : 'Not connected';
                     document.getElementById('wifi-rssi').textContent = status.wifi.rssi ? status.wifi.rssi + ' dBm' : '--';
                     document.getElementById('wifi-ip').textContent = status.wifi.ip || '--';
+                    if (status.wifi.ip) deviceIP = status.wifi.ip;
+                    updateMcpConfig();
                 }
 
                 // Pomodoro
@@ -3533,22 +3562,24 @@ String WebServerManager::generateSettingsPage() {
             }
         }
 
+        function updateMcpConfig() {
+            document.getElementById('mcp-endpoint').textContent =
+                'http://' + deviceIP + ':3001/sse';
+            const config = JSON.stringify({
+                "deskbuddy": {
+                    "command": "npx",
+                    "args": ["-y", "mcp-remote", "http://" + deviceIP + ":3001/sse", "--allow-http"]
+                }
+            }, null, 2);
+            document.getElementById('mcp-claude-config').textContent = config;
+        }
+
         async function loadMcpServers() {
             try {
                 const resp = await fetch('/api/mcp/servers');
                 if (resp.ok) {
                     const data = await resp.json();
                     updateMcpServersList(data.servers || []);
-                    const host = location.hostname;
-                    document.getElementById('mcp-endpoint').textContent =
-                        'http://' + host + ':3001/sse';
-                    const config = JSON.stringify({
-                        "deskbuddy": {
-                            "command": "npx",
-                            "args": ["-y", "mcp-remote", "http://" + host + ":3001/sse", "--allow-http"]
-                        }
-                    }, null, 2);
-                    document.getElementById('mcp-claude-config').textContent = config;
                 }
             } catch (e) { /* ignore */ }
         }
