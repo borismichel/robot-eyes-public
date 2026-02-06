@@ -84,6 +84,9 @@ enum class Expression {
     BreathingPrompt, ///< Alert eyes for breathing reminder
     Relaxed,         ///< Calm, peaceful eyes after breathing exercise
 
+    // Voice assistant
+    Listening,       ///< Attentive, ready to hear (wide open, focused)
+
     COUNT           ///< Number of expressions (for iteration)
 };
 
@@ -636,6 +639,22 @@ inline EyeShape relaxed() {
     return s;
 }
 
+/**
+ * @brief Listening - Attentive, ready to hear voice input
+ *
+ * Wide open eyes with slight upward gaze, conveying attentive
+ * listening for voice commands. Alert but calm.
+ */
+inline EyeShape listening() {
+    EyeShape s;
+    s.width = 1.1f;            // Slightly wider
+    s.height = 1.1f;           // Slightly taller
+    s.topLid = 0.0f;           // Fully open
+    s.cornerRadius = 1.1f;     // Rounder, softer
+    s.offsetX = -0.05f;        // Slight upward gaze (attentive)
+    return s;
+}
+
 } // namespace ExpressionPresets
 
 //=============================================================================
@@ -709,10 +728,53 @@ inline EyeShape getExpressionShape(Expression expr, bool isLeftEye) {
             return ExpressionPresets::breathingPrompt();
         case Expression::Relaxed:
             return ExpressionPresets::relaxed();
+        case Expression::Listening:
+            return ExpressionPresets::listening();
         case Expression::Neutral:
         default:
             return ExpressionPresets::neutral();
     }
+}
+
+/**
+ * @brief Parse expression from emotion string (from LLM responses)
+ * @param emotionStr Emotion name string (e.g., "happy", "thinking")
+ * @return Corresponding Expression, or Neutral if not recognized
+ */
+inline Expression parseExpression(const char* emotionStr) {
+    if (!emotionStr || strlen(emotionStr) == 0) return Expression::Neutral;
+
+    // Convert to lowercase for case-insensitive matching
+    String lower = String(emotionStr);
+    lower.toLowerCase();
+
+    // Map common emotion words to expressions
+    if (lower == "neutral") return Expression::Neutral;
+    if (lower == "happy" || lower == "joy" || lower == "joyful") return Expression::Happy;
+    if (lower == "sad" || lower == "unhappy") return Expression::Sad;
+    if (lower == "surprised" || lower == "surprise") return Expression::Surprised;
+    if (lower == "angry" || lower == "anger") return Expression::Angry;
+    if (lower == "suspicious" || lower == "skeptical") return Expression::Suspicious;
+    if (lower == "sleepy" || lower == "tired") return Expression::Sleepy;
+    if (lower == "scared" || lower == "fear" || lower == "afraid") return Expression::Scared;
+    if (lower == "content" || lower == "satisfied") return Expression::Content;
+    if (lower == "startled") return Expression::Startled;
+    if (lower == "grumpy" || lower == "annoyed") return Expression::Grumpy;
+    if (lower == "focused" || lower == "focus" || lower == "concentration") return Expression::Focused;
+    if (lower == "confused" || lower == "confusion" || lower == "puzzled") return Expression::Confused;
+    if (lower == "curious" || lower == "curiosity" || lower == "interested") return Expression::Curious;
+    if (lower == "thinking" || lower == "thoughtful" || lower == "pondering") return Expression::Thinking;
+    if (lower == "mischievous" || lower == "playful") return Expression::Mischievous;
+    if (lower == "bored" || lower == "boredom") return Expression::Bored;
+    if (lower == "alert" || lower == "attentive") return Expression::Alert;
+    if (lower == "smug") return Expression::Smug;
+    if (lower == "dreamy" || lower == "wistful") return Expression::Dreamy;
+    if (lower == "listening") return Expression::Listening;
+    if (lower == "excited" || lower == "excitement") return Expression::Joyful;
+    if (lower == "relaxed" || lower == "calm") return Expression::Relaxed;
+    if (lower == "love" || lower == "loving" || lower == "affection") return Expression::Love;
+
+    return Expression::Neutral;
 }
 
 /**
@@ -752,6 +814,7 @@ inline const char* getExpressionName(Expression expr) {
         case Expression::Wink:           return "Wink";
         case Expression::BreathingPrompt: return "BreathingPrompt";
         case Expression::Relaxed:        return "Relaxed";
+        case Expression::Listening:      return "Listening";
         default:                         return "Unknown";
     }
 }

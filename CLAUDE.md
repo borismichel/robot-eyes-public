@@ -21,7 +21,7 @@ There are TWO folders/repos:
 ### Version File
 Version is defined in `include/version.h`:
 ```cpp
-#define FIRMWARE_VERSION "1.0.0"
+#define FIRMWARE_VERSION "1.2.0"
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 ```
 
@@ -188,10 +188,11 @@ int16_t by = bufH - 1 - sx;
 
 Hierarchical menu with main menu and sub-menus:
 
-**Main Menu (3 pages):**
+**Main Menu (4 pages):**
 - PAGE_POMODORO (0): Opens pomodoro sub-menu
-- PAGE_SETTINGS (1): Opens settings sub-menu
-- PAGE_EXIT (2): Closes menu
+- PAGE_MINDFULNESS (1): Opens mindfulness sub-menu
+- PAGE_SETTINGS (2): Opens settings sub-menu
+- PAGE_EXIT (3): Closes menu
 
 **Pomodoro Sub-Menu (7 pages):**
 - POMO_PAGE_START_STOP (0): Start/stop timer
@@ -232,6 +233,108 @@ Settings persisted via Preferences library
 - Micro-expressions: Curious, Thinking, Mischievous, Bored, Alert
 - Curve/stretch: Smug, Dreamy, Skeptical, Squint, Wink
 - Breathing: BreathingPrompt, Relaxed (for post-exercise calm state)
+
+---
+
+## Voice Assistant
+
+Voice assistant stack in `src/assistant/`:
+
+### Architecture
+- **LLM Client** (`llm_client.h`): Supports Claude Sonnet 4 or GPT-4o, configurable via web UI
+- **STT Client** (`stt_client.h`): OpenAI Whisper, 16kHz mono streaming
+- **TTS Client** (`tts_client.h`): OpenAI TTS
+- **Wake Word** (`wake_word.h`): ESP-SR local detection for "Hey Buddy" (no API needed)
+  - Built-in wake words: Hi ESP, Alexa, custom
+  - Currently in stub mode until ESP-SR component is added to platformio.ini
+  - Manual trigger via `trigger()` or push-to-talk
+- **Voice Input** (`voice_input.h`): Ring buffer for microphone audio (16kHz, 2-second capacity)
+- **Assistant** (`assistant.h`): Main orchestrator tying STT → LLM → TTS together
+
+### Device Tools (`device_tools.h`)
+
+14 tools registered for both LLM tool use and MCP server:
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `set_expression` | Change facial expression | expression, duration_ms |
+| `set_timer` | Start countdown timer | duration_seconds, name |
+| `cancel_timer` | Stop countdown timer | — |
+| `start_pomodoro` | Start Pomodoro session | work_minutes, break_minutes |
+| `stop_pomodoro` | Stop Pomodoro session | — |
+| `get_device_info` | Device status | — |
+| `play_sound` | Play audio | sound (happy/sad/alert/confirm/error) |
+| `set_reminder` | Create timed reminder | hour, minute, message, recurring |
+| `cancel_reminder` | Remove reminder by text | message (partial match) |
+| `list_reminders` | List all reminders | — |
+| `start_breathing` | Start box breathing | — |
+| `set_volume` | Set speaker volume | volume (0-100) |
+| `set_brightness` | Set screen brightness | brightness (0-100) |
+| `set_eye_color` | Change eye color | color (cyan/pink/green/orange/purple/white/red/blue) |
+
+**Callback pattern**: `DeviceToolCallbacks` struct in `device_tools.h` with `std::function` members. Wired in `main.cpp setup()`. `executeDeviceTool()` dispatches by tool name.
+
+**get_device_info returns**: expression, wifi_rssi, ip, uptime_seconds, free_heap, volume, brightness, eye_color, pomodoro_active (+ remaining seconds if active)
+
+### MCP Server (`mcp_server.h`)
+
+- Runs on dedicated FreeRTOS task (separate from main loop)
+- HTTP+SSE transport on port 3001
+- 15s keepalive interval
+- Tool executor set via `mcpServer.setToolExecutor()` lambda in main.cpp
+- SSE connection with `setNoDelay(true)` and `flush()` for reliability
+
+### MCP Client (`mcp_client.h`)
+
+- Connects to external MCP servers for tool discovery
+- Up to 8 MCP servers, 16 tools per server
+- 10s HTTP timeout
+- Configurable via web UI (Assistant tab → Connected MCP Servers)
+
+---
+
+## Countdown Timer
+
+Standalone countdown timer in `src/ui/countdown_timer.h`:
+
+- On-screen countdown display with progress bar
+- Alert celebration animation when done
+- Start/stop via web API (`/api/timer/start`, `/api/timer/stop`) or MCP tool (`set_timer`, `cancel_timer`)
+
+---
+
+## Timed Reminders
+
+Reminder system in `src/ui/reminder_manager.h`:
+
+### Data Model
+```cpp
+struct Reminder {
+    uint8_t hour;       // 0-23
+    uint8_t minute;     // 0-59
+    char message[49];   // 48 chars + null
+    bool recurring;     // daily repeat
+    bool enabled;       // active flag
+};
+```
+
+### State Machine
+```
+Idle → Showing → (Dismiss → Idle) or (Snooze → Idle, re-triggers in 5 min)
+```
+
+### Features
+- Max 20 reminders, persisted to NVS as JSON
+- Full-screen takeover: large text + "SNOOZE" / "OK" touch zones
+- Sound: plays `joy.mp3` on trigger
+- Auto-snooze after 60 seconds of no interaction
+- One-shot reminders removed after dismiss; recurring reminders persist
+- Blocked during Pomodoro, countdown timer, breathing exercise, or settings menu
+- `removeByMessage(substring)` for fuzzy cancel via MCP
+
+### API
+- Web: `GET /api/reminders`, `POST /api/reminders`, `POST /api/reminders/delete`
+- MCP: `set_reminder`, `cancel_reminder`, `list_reminders`
 
 ---
 
@@ -367,13 +470,11 @@ Breathing reminders don't trigger during:
 - Sleep mode
 - Settings menu open
 
-### Key Functions
+### MCP Trigger
+When triggered via MCP `start_breathing` tool, skips the confirmation prompt and starts immediately:
 ```cpp
-breathingExercise.checkScheduledReminder()  // Called in main loop
-breathingExercise.startBreathingNow()       // Manual start
-breathingExercise.isActive()                // Currently breathing
-breathingExercise.needsFullScreenRender()   // Prompt or exercise showing
-breathingExercise.getBreathingPhase()       // For eye animation sync
+breathingExercise.triggerNow();  // Idle/Disabled → ShowingPrompt
+breathingExercise.start();       // ShowingPrompt → Confirmation → exercise
 ```
 
 ---
@@ -413,44 +514,49 @@ enum class WiFiState {
 - `isShowingWiFiChoice` - True during choice screen (after AP client connects)
 - `lastAPClientCount` - Tracks AP client connections
 
-**WiFi Disable:**
-- Toggle via device settings menu (Settings → WiFi)
-- Toggle via web UI (WiFi tab → Disable WiFi button with confirmation)
-- Calls `wifiManager.disable()` which sets `WIFI_OFF` mode
-
-**Factory Reset:**
-- Hold BOOT button for 5+ seconds
-- Clears saved credentials
-- Device restarts in AP mode
-
 ### Web Server (web_server.h)
 
 Uses ESP-IDF native `esp_http_server` for Arduino ESP32 3.x compatibility.
 
-**Key Endpoints:**
-```cpp
-GET  /                  // Main web UI
-GET  /api/settings      // All settings JSON
-POST /api/settings      // Update settings (volume, brightness, micGain, micThreshold, eyeColorIndex, gmtOffsetHours, workMinutes, shortBreakMinutes, longBreakMinutes, sessionsBeforeLongBreak, tickingEnabled)
-GET  /api/status        // Status JSON (wifi, pomodoro, time, uptimeSeconds, currentMood)
-POST /api/expression    // Preview expression (index: 0-29)
-POST /api/audio/test    // Play test sound (happy.mp3)
-POST /api/pomodoro/start
-POST /api/pomodoro/stop
-GET  /api/wifi/scan     // Returns array of {ssid, rssi, secure}
-POST /api/wifi/connect  // {ssid, password}
-POST /api/wifi/forget   // Clears credentials
-POST /api/wifi/disable  // Disables WiFi completely (sets wifiEnabled=false)
-GET  /api/system/info   // Version, build date, heap, partition info
-POST /api/ota/upload    // Upload firmware binary (Content-Type: application/octet-stream)
-GET  /api/ota/status    // OTA progress (state, progress, bytesReceived, totalBytes)
-POST /api/ota/cancel    // Abort OTA upload
-POST /api/system/restart   // Restart device
-POST /api/system/rollback  // Rollback to previous firmware
+**All Endpoints:**
+```
+GET  /                      Main web UI
+GET  /api/settings          All settings JSON
+POST /api/settings          Update settings
+GET  /api/status            Status JSON (wifi, pomodoro, time, mood, reminders)
+POST /api/expression        Preview expression (index: 0-31)
+POST /api/audio/test        Play test sound (happy.mp3)
+POST /api/pomodoro/start    Start Pomodoro
+POST /api/pomodoro/stop     Stop Pomodoro
+POST /api/timer/start       Start countdown timer
+POST /api/timer/stop        Stop countdown timer
+GET  /api/reminders         List all reminders
+POST /api/reminders         Add reminder (hour, minute, message, recurring)
+POST /api/reminders/delete  Delete reminder by index
+POST /api/breathing/start   Start breathing exercise
+GET  /api/assistant/status  Voice assistant status
+POST /api/assistant/clear   Clear conversation history
+GET  /api/assistant/settings  Get assistant config
+POST /api/assistant/settings  Update assistant config (provider, API keys, voice)
+GET  /api/mcp/servers       List connected MCP servers
+POST /api/mcp/servers       Add/update MCP server
+POST /api/mcp/discover      Discover MCP server tools
+GET  /api/wifi/scan         Scan WiFi networks
+POST /api/wifi/connect      Connect to network (ssid, password)
+POST /api/wifi/forget       Clear saved credentials
+POST /api/wifi/disable      Disable WiFi completely
+GET  /api/time              Get current time
+POST /api/time              Set time (hour, minute, is24Hour)
+GET  /api/system/info       Version, build date, heap, partition info
+POST /api/ota/upload        Upload firmware binary
+GET  /api/ota/status        OTA progress
+POST /api/ota/cancel        Cancel OTA upload
+POST /api/system/restart    Restart device
+POST /api/system/rollback   Rollback to previous firmware
 ```
 
 **OTA Updates:**
-- Web UI System tab with drag-and-drop firmware upload
+- Web UI System accordion with drag-and-drop firmware upload
 - Uses ESP-IDF OTA APIs with dual-partition scheme (APP0/APP1)
 - Automatic rollback if new firmware fails to boot
 - `OtaManager` class in `src/network/ota_manager.h`
@@ -475,27 +581,22 @@ if (webServer.hasSettingsChange()) {
 }
 ```
 
-**Expression Preview Callback:**
-```cpp
-void onWebExpressionPreview(int index) {
-    if (index >= 0 && index < (int)Expression::COUNT) {
-        setExpression((Expression)index);
-    }
-}
-webServer.setExpressionCallback(onWebExpressionPreview);
-```
-
 ### Web UI Design
 
 - Dark theme: background `#0A0A0A`, foreground `#F2F2F2`, accent `#DFFF00` (neon yellow)
 - Fonts: JetBrains Mono (labels), Inter (body)
-- Tabbed navigation: Dashboard, Display, Audio, Time, WiFi, Pomodoro, Expressions, System
+- Tabbed navigation: Dashboard, Productivity, Mindfulness, Assistant, Settings, Expressions
 - Settings sync via polling `/api/status` every 1 second
 - Color picker: 8 presets matching device `COLOR_PRESETS` array order
 - Dashboard shows: WiFi status, IP, Current Mood, Time, Uptime
-- Audio tab has "Test Audio" button to verify speaker output
-- Time tab includes timezone (GMT offset) selector
-- Expressions tab shows current mood at top
+
+**Tab Contents:**
+- **Dashboard**: Status cards, quick sliders
+- **Productivity**: Reminders (add/list/delete), Countdown Timer (start/stop), Pomodoro Timer (settings + start/stop)
+- **Mindfulness**: Box Breathing (start, schedule toggle, interval, sound toggle)
+- **Assistant**: LLM provider (Claude/OpenAI), API keys with test buttons, voice settings, push-to-talk toggle, DeskBuddy MCP Server info, Connected MCP Servers management
+- **Settings**: Display (brightness, eye color), Audio (volume, mic gain, mic threshold, test), Time (hour/minute, 12H/24H, timezone), WiFi (status, scan, connect, forget, disable), System (firmware info, OTA upload, restart, rollback)
+- **Expressions**: Current mood indicator, grid of 32 expression preview buttons
 
 **Eye Color Order (must match device):**
 ```cpp

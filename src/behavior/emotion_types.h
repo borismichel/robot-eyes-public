@@ -126,6 +126,22 @@ struct EmotionConfig {
                 config.max_duration = 8000;
                 break;
 
+            case Emotion::LISTENING:
+                config.weight = 0.0f;           // Not auto-selected
+                config.min_duration = 500;
+                config.max_duration = 30000;    // As long as listening
+                config.transition_time = 150;   // Quick transition
+                config.can_auto_select = false; // Only triggered by assistant
+                break;
+
+            case Emotion::THINKING:
+                config.weight = 0.0f;           // Not auto-selected
+                config.min_duration = 500;
+                config.max_duration = 60000;    // As long as processing
+                config.transition_time = 200;
+                config.can_auto_select = false; // Only triggered by assistant
+                break;
+
             default:
                 config.weight = 1.0f;
                 config.min_duration = 2000;
@@ -155,6 +171,10 @@ enum class TriggerEvent {
     FLIP,           // Upside down
     IDLE_LONG,      // Idle for a long time
     WAKE,           // Wake from sleep
+    VOICE_LISTENING,  // Voice assistant started listening
+    VOICE_THINKING,   // Voice assistant processing
+    VOICE_SPEAKING,   // Voice assistant speaking response
+    VOICE_IDLE,       // Voice assistant finished
 };
 
 #endif // EMOTION_TYPES_H

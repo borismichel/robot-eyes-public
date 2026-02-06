@@ -37,9 +37,16 @@
 #include "ota_manager.h"
 #include "../ui/settings_menu.h"
 #include "../ui/pomodoro.h"
+#include "../ui/countdown_timer.h"
+#include "../ui/reminder_manager.h"
 #include "../behavior/breathing_exercise.h"
+#include "../assistant/mcp_client.h"
+#include "../assistant/mcp_server.h"
+#include "../assistant/device_tools.h"
+#include "../assistant/assistant.h"
 #include "version.h"
 #include <WiFi.h>
+#include <Preferences.h>
 
 WebServerManager::WebServerManager()
     : server(nullptr)
@@ -48,6 +55,8 @@ WebServerManager::WebServerManager()
     , wifiManager(nullptr)
     , otaManager(nullptr)
     , breathingExercise(nullptr)
+    , countdownTimer(nullptr)
+    , reminderManager(nullptr)
     , settingsChanged(false)
     , expressionCallback(nullptr)
     , audioTestCallback(nullptr)
@@ -72,7 +81,7 @@ bool WebServerManager::begin(SettingsMenu* settings, PomodoroTimer* pomodoro, Wi
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 22;  // +1 for breathing endpoint
+    config.max_uri_handlers = 30;  // 28 web handlers + headroom
     config.stack_size = 8192;  // Larger stack for OTA uploads
 
     esp_err_t err = httpd_start(&server, &config);
@@ -181,6 +190,46 @@ bool WebServerManager::begin(SettingsMenu* settings, PomodoroTimer* pomodoro, Wi
     };
     httpd_register_uri_handler(server, &pomodoroStopUri);
 
+    httpd_uri_t timerStartUri = {
+        .uri = "/api/timer/start",
+        .method = HTTP_POST,
+        .handler = handleTimerStart,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &timerStartUri);
+
+    httpd_uri_t timerStopUri = {
+        .uri = "/api/timer/stop",
+        .method = HTTP_POST,
+        .handler = handleTimerStop,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &timerStopUri);
+
+    httpd_uri_t getRemindersUri = {
+        .uri = "/api/reminders",
+        .method = HTTP_GET,
+        .handler = handleGetReminders,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &getRemindersUri);
+
+    httpd_uri_t postReminderUri = {
+        .uri = "/api/reminders",
+        .method = HTTP_POST,
+        .handler = handlePostReminder,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &postReminderUri);
+
+    httpd_uri_t deleteReminderUri = {
+        .uri = "/api/reminders/delete",
+        .method = HTTP_POST,
+        .handler = handleDeleteReminder,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &deleteReminderUri);
+
     httpd_uri_t expressionUri = {
         .uri = "/api/expression",
         .method = HTTP_POST,
@@ -254,6 +303,71 @@ bool WebServerManager::begin(SettingsMenu* settings, PomodoroTimer* pomodoro, Wi
         .user_ctx = this
     };
     httpd_register_uri_handler(server, &breathingStartUri);
+
+    // Assistant endpoints
+    httpd_uri_t assistantStatusUri = {
+        .uri = "/api/assistant/status",
+        .method = HTTP_GET,
+        .handler = handleAssistantStatus,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &assistantStatusUri);
+
+    httpd_uri_t assistantClearUri = {
+        .uri = "/api/assistant/clear",
+        .method = HTTP_POST,
+        .handler = handleAssistantClear,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &assistantClearUri);
+
+    httpd_uri_t assistantSettingsGetUri = {
+        .uri = "/api/assistant/settings",
+        .method = HTTP_GET,
+        .handler = handleGetAssistantSettings,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &assistantSettingsGetUri);
+
+    httpd_uri_t assistantSettingsPostUri = {
+        .uri = "/api/assistant/settings",
+        .method = HTTP_POST,
+        .handler = handlePostAssistantSettings,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &assistantSettingsPostUri);
+
+    // MCP endpoints
+    httpd_uri_t mcpServersGetUri = {
+        .uri = "/api/mcp/servers",
+        .method = HTTP_GET,
+        .handler = handleGetMcpServers,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &mcpServersGetUri);
+
+    httpd_uri_t mcpServersPostUri = {
+        .uri = "/api/mcp/servers",
+        .method = HTTP_POST,
+        .handler = handlePostMcpServer,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &mcpServersPostUri);
+
+    httpd_uri_t mcpDiscoverUri = {
+        .uri = "/api/mcp/discover",
+        .method = HTTP_POST,
+        .handler = handleMcpDiscover,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(server, &mcpDiscoverUri);
+
+    // Initialize MCP SSE server on its own TCP port
+    mcpServer.setToolExecutor([](const String& name, const String& args) -> String {
+        return executeDeviceTool(name.c_str(), args.c_str());
+    });
+    registerMcpDeviceTools(mcpServer);
+    mcpServer.begin();  // Starts dedicated TCP server on port 3001
 
     Serial.printf("[WebServer] Started on port %d\n", config.server_port);
     return true;
@@ -358,6 +472,13 @@ esp_err_t WebServerManager::handlePostSettings(httpd_req_t* req) {
         }
         if (doc["tickingEnabled"].is<bool>()) {
             self->pomodoroTimer->setTickingEnabled(doc["tickingEnabled"].as<bool>());
+        }
+    }
+
+    // Apply countdown timer settings
+    if (self->countdownTimer) {
+        if (doc["timerTickingEnabled"].is<bool>()) {
+            self->countdownTimer->setTickingEnabled(doc["timerTickingEnabled"].as<bool>());
         }
     }
 
@@ -480,6 +601,127 @@ esp_err_t WebServerManager::handlePomodoroStop(httpd_req_t* req) {
 
     if (self->pomodoroTimer && self->pomodoroTimer->isActive()) {
         self->pomodoroTimer->stop();
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true}");
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleTimerStart(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    // Read body for minutes parameter
+    int minutes = 5;  // default
+    char buf[128];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret > 0) {
+        buf[ret] = '\0';
+        JsonDocument doc;
+        if (!deserializeJson(doc, buf)) {
+            minutes = doc["minutes"] | 5;
+        }
+    }
+
+    if (self->countdownTimer && !self->countdownTimer->isActive()) {
+        self->countdownTimer->start(minutes * 60, "TIMER");
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true}");
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleTimerStop(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    if (self->countdownTimer && self->countdownTimer->isActive()) {
+        self->countdownTimer->stop();
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true}");
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleGetReminders(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    JsonDocument doc;
+    JsonArray arr = doc.to<JsonArray>();
+    if (self->reminderManager) {
+        for (const auto& r : self->reminderManager->getReminders()) {
+            JsonObject obj = arr.add<JsonObject>();
+            obj["hour"] = r.hour;
+            obj["minute"] = r.minute;
+            obj["message"] = r.message;
+            obj["recurring"] = r.recurring;
+        }
+    }
+
+    String output;
+    serializeJson(doc, output);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, output.c_str());
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handlePostReminder(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    char buf[256];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_FAIL;
+    }
+    buf[ret] = '\0';
+
+    JsonDocument doc;
+    if (deserializeJson(doc, buf)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    int hour = doc["hour"] | 0;
+    int minute = doc["minute"] | 0;
+    const char* message = doc["message"] | "";
+    bool recurring = doc["recurring"] | false;
+
+    bool ok = false;
+    if (self->reminderManager) {
+        ok = self->reminderManager->add(hour, minute, message, recurring);
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    if (ok) {
+        httpd_resp_sendstr(req, "{\"success\":true}");
+    } else {
+        httpd_resp_sendstr(req, "{\"success\":false,\"error\":\"Failed to add reminder\"}");
+    }
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleDeleteReminder(httpd_req_t* req) {
+    WebServerManager* self = getInstance(req);
+
+    char buf[64];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_FAIL;
+    }
+    buf[ret] = '\0';
+
+    JsonDocument doc;
+    if (deserializeJson(doc, buf)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    int index = doc["index"] | -1;
+    if (self->reminderManager && index >= 0) {
+        self->reminderManager->remove(index);
     }
 
     httpd_resp_set_type(req, "application/json");
@@ -823,6 +1065,208 @@ esp_err_t WebServerManager::handleBreathingStart(httpd_req_t* req) {
 }
 
 // ============================================================================
+// Assistant Handlers
+// ============================================================================
+
+esp_err_t WebServerManager::handleAssistantStatus(httpd_req_t* req) {
+    JsonDocument doc;
+
+    // Get assistant state if available
+    extern class Assistant assistant;
+    doc["state"] = "Idle"; // Default
+    doc["contextTokens"] = 0;
+
+    String response;
+    serializeJson(doc, response);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, response.c_str());
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleAssistantClear(httpd_req_t* req) {
+    // Clear assistant history
+    extern class Assistant assistant;
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true}");
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleGetAssistantSettings(httpd_req_t* req) {
+    Preferences prefs;
+    prefs.begin("assistant", true);
+
+    JsonDocument doc;
+    doc["llmProvider"] = prefs.getString("llmProv", "claude");
+    doc["llmApiKey"] = prefs.getString("llmKey", "").length() > 0 ? "********" : "";
+    doc["openaiVoiceKey"] = prefs.getString("voiceKey", "").length() > 0 ? "********" : "";
+    doc["ttsVoice"] = prefs.getString("ttsVoice", "alloy");
+    doc["ttsSpeed"] = prefs.getFloat("ttsSpeed", 1.0);
+    doc["wakeWordEnabled"] = prefs.getBool("wakeWord", true);
+    doc["pttEnabled"] = prefs.getBool("ptt", true);
+    doc["wakeSensitivity"] = prefs.getInt("wakeSens", 50);
+    doc["systemPrompt"] = prefs.getString("sysPrompt", "You are DeskBuddy, a helpful desk companion.");
+
+    prefs.end();
+
+    String response;
+    serializeJson(doc, response);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, response.c_str());
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handlePostAssistantSettings(httpd_req_t* req) {
+    char buf[2048];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_FAIL;
+    }
+    buf[ret] = '\0';
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, buf);
+    if (error) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    Preferences prefs;
+    prefs.begin("assistant", false);
+
+    if (doc["llmProvider"].is<const char*>()) {
+        prefs.putString("llmProv", doc["llmProvider"].as<String>());
+    }
+    if (doc["llmApiKey"].is<const char*>() && strlen(doc["llmApiKey"]) > 0) {
+        prefs.putString("llmKey", doc["llmApiKey"].as<String>());
+    }
+    if (doc["openaiVoiceKey"].is<const char*>() && strlen(doc["openaiVoiceKey"]) > 0) {
+        prefs.putString("voiceKey", doc["openaiVoiceKey"].as<String>());
+    }
+    if (doc["ttsVoice"].is<const char*>()) {
+        prefs.putString("ttsVoice", doc["ttsVoice"].as<String>());
+    }
+    if (doc["ttsSpeed"].is<float>()) {
+        prefs.putFloat("ttsSpeed", doc["ttsSpeed"].as<float>());
+    }
+    if (doc["wakeWordEnabled"].is<bool>()) {
+        prefs.putBool("wakeWord", doc["wakeWordEnabled"].as<bool>());
+    }
+    if (doc["pttEnabled"].is<bool>()) {
+        prefs.putBool("ptt", doc["pttEnabled"].as<bool>());
+    }
+    if (doc["wakeSensitivity"].is<int>()) {
+        prefs.putInt("wakeSens", doc["wakeSensitivity"].as<int>());
+    }
+    if (doc["systemPrompt"].is<const char*>()) {
+        prefs.putString("sysPrompt", doc["systemPrompt"].as<String>());
+    }
+
+    prefs.end();
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true}");
+    return ESP_OK;
+}
+
+// ============================================================================
+// MCP Handlers
+// ============================================================================
+
+esp_err_t WebServerManager::handleGetMcpServers(httpd_req_t* req) {
+    extern class MCPClient mcpClient;
+
+    JsonDocument doc;
+    JsonArray servers = doc["servers"].to<JsonArray>();
+
+    int count = mcpClient.getServerCount();
+    for (int i = 0; i < count; i++) {
+        const MCPServerConfig* cfg = mcpClient.getServer(i);
+        if (cfg) {
+            JsonObject s = servers.add<JsonObject>();
+            s["name"] = cfg->name;
+            s["url"] = cfg->url;
+            s["enabled"] = cfg->enabled;
+            s["connected"] = cfg->connected;
+            if (cfg->lastError.length() > 0) {
+                s["error"] = cfg->lastError;
+            }
+        }
+    }
+
+    String response;
+    serializeJson(doc, response);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, response.c_str());
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handlePostMcpServer(httpd_req_t* req) {
+    char buf[512];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_FAIL;
+    }
+    buf[ret] = '\0';
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, buf);
+    if (error) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    const char* name = doc["name"];
+    const char* url = doc["url"];
+    const char* apiKey = doc["apiKey"];
+
+    if (!name || !url) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Name and URL required");
+        return ESP_FAIL;
+    }
+
+    extern class MCPClient mcpClient;
+    int index = mcpClient.addServer(name, url, apiKey);
+
+    if (index >= 0) {
+        mcpClient.saveConfig();
+    }
+
+    JsonDocument respDoc;
+    respDoc["success"] = (index >= 0);
+    respDoc["index"] = index;
+
+    String response;
+    serializeJson(respDoc, response);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, response.c_str());
+    return ESP_OK;
+}
+
+esp_err_t WebServerManager::handleMcpDiscover(httpd_req_t* req) {
+    extern class MCPClient mcpClient;
+
+    int toolCount = mcpClient.discoverTools();
+
+    JsonDocument doc;
+    doc["success"] = true;
+    doc["toolCount"] = toolCount;
+
+    String response;
+    serializeJson(doc, response);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, response.c_str());
+    return ESP_OK;
+}
+
+// ============================================================================
 // JSON Builders
 // ============================================================================
 
@@ -845,6 +1289,11 @@ void WebServerManager::buildSettingsJson(JsonDocument& doc) {
         pomodoro["longBreakMinutes"] = pomodoroTimer->getLongBreakMinutes();
         pomodoro["sessionsBeforeLongBreak"] = pomodoroTimer->getSessionsBeforeLongBreak();
         pomodoro["tickingEnabled"] = pomodoroTimer->isTickingEnabled();
+    }
+
+    if (countdownTimer) {
+        JsonObject timer = doc["timer"].to<JsonObject>();
+        timer["tickingEnabled"] = countdownTimer->isTickingEnabled();
     }
 
     if (breathingExercise) {
@@ -915,6 +1364,14 @@ void WebServerManager::buildStatusJson(JsonDocument& doc) {
         pomodoro["currentSession"] = pomodoroTimer->getSessionNumber();
     }
 
+    // Countdown timer status
+    if (countdownTimer) {
+        JsonObject timer = doc["timer"].to<JsonObject>();
+        timer["active"] = countdownTimer->isActive();
+        timer["remainingSeconds"] = countdownTimer->getRemainingSeconds();
+        timer["name"] = countdownTimer->getTimerName();
+    }
+
     // Breathing status
     if (breathingExercise) {
         JsonObject breathing = doc["breathing"].to<JsonObject>();
@@ -924,6 +1381,18 @@ void WebServerManager::buildStatusJson(JsonDocument& doc) {
         breathing["startHour"] = breathingExercise->getStartHour();
         breathing["endHour"] = breathingExercise->getEndHour();
         breathing["intervalMinutes"] = breathingExercise->getIntervalMinutes();
+    }
+
+    // Reminders status
+    if (reminderManager) {
+        JsonArray reminders = doc["reminders"].to<JsonArray>();
+        for (const auto& r : reminderManager->getReminders()) {
+            JsonObject obj = reminders.add<JsonObject>();
+            obj["hour"] = r.hour;
+            obj["minute"] = r.minute;
+            obj["message"] = r.message;
+            obj["recurring"] = r.recurring;
+        }
     }
 }
 
@@ -1268,6 +1737,21 @@ String WebServerManager::generateSettingsPage() {
         .btn-danger:hover { filter: brightness(0.9); }
         .btn + .btn { margin-top: 12px; }
 
+        /* Input group (input + button side by side) */
+        .input-group {
+            display: flex;
+            gap: 8px;
+            align-items: stretch;
+        }
+        .input-group .btn {
+            width: auto;
+            flex-shrink: 0;
+        }
+        .input-group .wifi-input {
+            flex: 1;
+            margin-bottom: 0;
+        }
+
         /* OTA upload */
         .ota-dropzone {
             border: 2px dashed var(--border);
@@ -1442,6 +1926,53 @@ String WebServerManager::generateSettingsPage() {
             to { transform: translateX(-50%) translateY(0); opacity: 1; }
         }
 
+        /* Modal */
+        .modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 300;
+        }
+        .modal-content {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            overflow: hidden;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .modal-header span {
+            font-weight: 600;
+        }
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--muted-foreground);
+            font-size: 24px;
+            cursor: pointer;
+        }
+        .modal-close:hover { color: var(--foreground); }
+        .modal-body {
+            padding: 20px;
+        }
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+        }
+
         /* Accordions */
         .accordion {
             border: 1px solid var(--border);
@@ -1498,6 +2029,7 @@ String WebServerManager::generateSettingsPage() {
         <button class="tab active" data-tab="dashboard">Dashboard</button>
         <button class="tab" data-tab="productivity">Productivity</button>
         <button class="tab" data-tab="mindfulness">Mindfulness</button>
+        <button class="tab" data-tab="assistant">Assistant</button>
         <button class="tab" data-tab="settings">Settings</button>
         <button class="tab" data-tab="expressions">Expressions</button>
     </div>
@@ -1720,6 +2252,104 @@ String WebServerManager::generateSettingsPage() {
                 </div>
             </div>
 
+            <!-- Assistant Settings Accordion -->
+            <div class="accordion" data-accordion="assistant-settings">
+                <div class="accordion-header" onclick="toggleAccordion('assistant-settings')">
+                    <span class="accordion-title">Assistant</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="card-title">LLM Configuration</div>
+                    <div class="form-group">
+                        <div class="form-label"><span>LLM Provider</span></div>
+                        <select id="llm-provider" class="wifi-input" onchange="updateLlmKeyPlaceholder()">
+                            <option value="claude">Claude (Anthropic)</option>
+                            <option value="openai">OpenAI (GPT-4)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-label"><span id="llm-key-label">Claude API Key</span></div>
+                        <div class="input-group">
+                            <input type="password" id="llm-api-key" class="wifi-input" placeholder="sk-ant-...">
+                            <button class="btn btn-secondary" onclick="testLlmApi()">Test</button>
+                        </div>
+                    </div>
+
+                    <div class="card-title" style="margin-top: 24px;">Voice Configuration (OpenAI)</div>
+                    <p style="color: var(--muted-foreground); font-size: 12px; margin-bottom: 12px;">
+                        Uses OpenAI Whisper for speech-to-text and OpenAI TTS for voice output.
+                    </p>
+                    <div class="form-group">
+                        <div class="form-label"><span>OpenAI API Key</span></div>
+                        <div class="input-group">
+                            <input type="password" id="openai-voice-key" class="wifi-input" placeholder="sk-...">
+                            <button class="btn btn-secondary" onclick="testVoiceApi()">Test</button>
+                        </div>
+                        <p style="color: var(--muted-foreground); font-size: 11px; margin-top: 4px;">
+                            Same key as LLM if using OpenAI for both.
+                        </p>
+                    </div>
+
+                    <div class="card-title" style="margin-top: 24px;">Voice Settings</div>
+                    <div class="form-group">
+                        <div class="form-label"><span>Voice</span></div>
+                        <div class="input-group">
+                            <select id="tts-voice" class="wifi-input">
+                                <option value="alloy">Alloy</option>
+                                <option value="echo">Echo</option>
+                                <option value="fable">Fable</option>
+                                <option value="onyx">Onyx</option>
+                                <option value="nova">Nova</option>
+                                <option value="shimmer">Shimmer</option>
+                            </select>
+                            <button class="btn btn-secondary" onclick="previewVoice()">Preview</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-label">
+                            <span>Speech Speed</span>
+                            <span class="form-value" id="tts-speed-val">1.0x</span>
+                        </div>
+                        <input type="range" id="tts-speed" min="0.5" max="2.0" step="0.1" value="1.0">
+                    </div>
+
+                    <div class="card-title" style="margin-top: 24px;">Activation</div>
+                    <div class="toggle-row">
+                        <span class="toggle-label">Wake Word ("Hey Buddy")</span>
+                        <label class="toggle">
+                            <input type="checkbox" id="wake-word-enabled">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <p style="color: var(--muted-foreground); font-size: 11px; margin: 4px 0 12px 0;">
+                        Requires ESP-SR. Currently in stub mode - use push-to-talk.
+                    </p>
+                    <div class="toggle-row">
+                        <span class="toggle-label">Push-to-Talk (hold screen)</span>
+                        <label class="toggle">
+                            <input type="checkbox" id="ptt-enabled" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <p style="color: var(--muted-foreground); font-size: 11px; margin: 4px 0 12px 0;">
+                        When enabled, holding the screen activates voice input. Disables petting gesture.
+                    </p>
+                    <div class="form-group" style="margin-top: 16px;">
+                        <div class="form-label">
+                            <span>Wake Word Sensitivity</span>
+                            <span class="form-value" id="wake-sensitivity-val">50%</span>
+                        </div>
+                        <input type="range" id="wake-sensitivity" min="0" max="100" value="50">
+                    </div>
+
+                    <div class="card-title" style="margin-top: 24px;">System Prompt</div>
+                    <div class="form-group">
+                        <textarea id="system-prompt" class="wifi-input" rows="4" style="resize: vertical; min-height: 100px;" placeholder="You are DeskBuddy, a helpful desk companion..."></textarea>
+                    </div>
+                    <button class="btn btn-primary" onclick="saveAssistantSettings()">Save Settings</button>
+                </div>
+            </div>
+
             <!-- System Accordion -->
             <div class="accordion" data-accordion="system">
                 <div class="accordion-header" onclick="toggleAccordion('system')">
@@ -1773,6 +2403,79 @@ String WebServerManager::generateSettingsPage() {
         <!-- Productivity -->
         <section id="productivity" class="section">
             <span class="section-header">Productivity</span>
+
+            <!-- Reminders Accordion -->
+            <div class="accordion open" data-accordion="reminders">
+                <div class="accordion-header" onclick="toggleAccordion('reminders')">
+                    <span class="accordion-title">Reminders</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div id="reminder-list"></div>
+                    <div class="card">
+                        <div class="card-title">Add Reminder</div>
+                        <div class="form-group">
+                            <div class="form-label"><span>Time</span></div>
+                            <input type="time" id="reminder-time" value="12:00" style="background:#1A1A1A;color:#F2F2F2;border:1px solid #333;border-radius:8px;padding:8px 12px;font-family:'JetBrains Mono',monospace;font-size:14px;width:100%;box-sizing:border-box;">
+                        </div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Message</span>
+                                <span class="form-value" id="reminder-char-count">0/48</span>
+                            </div>
+                            <input type="text" id="reminder-message" maxlength="48" placeholder="Take out trash" style="background:#1A1A1A;color:#F2F2F2;border:1px solid #333;border-radius:8px;padding:8px 12px;font-family:'JetBrains Mono',monospace;font-size:14px;width:100%;box-sizing:border-box;">
+                        </div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">Repeat Daily</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="reminder-recurring">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <button class="btn btn-primary" onclick="addReminder()" style="margin-top:12px;">Add Reminder</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Countdown Timer Accordion -->
+            <div class="accordion open" data-accordion="countdown">
+                <div class="accordion-header" onclick="toggleAccordion('countdown')">
+                    <span class="accordion-title">Countdown Timer</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="card">
+                        <div class="pomodoro-display">
+                            <div class="pomodoro-time" id="timer-time">--:--</div>
+                            <div class="pomodoro-state" id="timer-state">Ready</div>
+                        </div>
+                        <button class="btn btn-primary" id="btn-timer-start" onclick="startCountdown()">Start</button>
+                        <button class="btn btn-danger hidden" id="btn-timer-stop" onclick="stopCountdown()">Stop</button>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-title">Duration</div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Minutes</span>
+                                <span class="form-value" id="timerMinutes-val">5 min</span>
+                            </div>
+                            <input type="range" id="timerMinutes" min="1" max="60" value="5">
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-title">Options</div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">Ticking Sound (last 60s)</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="timerTickingEnabled" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             <!-- Pomodoro Accordion -->
             <div class="accordion open" data-accordion="pomodoro">
@@ -1910,7 +2613,106 @@ String WebServerManager::generateSettingsPage() {
                 </div>
             </div>
         </section>
+
+        <!-- Assistant -->
+        <section id="assistant" class="section">
+            <span class="section-header">Voice Assistant</span>
+
+            <!-- Assistant Status Card -->
+            <div class="card">
+                <div class="card-title">Status</div>
+                <div class="dashboard-grid" style="margin-top: 12px;">
+                    <div class="stat-card">
+                        <div class="stat-label">State</div>
+                        <div class="stat-value" id="assistant-state">Idle</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Context Tokens</div>
+                        <div class="stat-value" id="assistant-tokens">0 / 8000</div>
+                    </div>
+                </div>
+                <button class="btn btn-secondary" onclick="clearAssistantHistory()" style="margin-top: 16px;">Clear History</button>
+            </div>
+
+            <!-- MCP Server Status Accordion -->
+            <div class="accordion open" data-accordion="mcp-server">
+                <div class="accordion-header" onclick="toggleAccordion('mcp-server')">
+                    <span class="accordion-title">DeskBuddy MCP Server</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="status-row">
+                        <span class="status-row-label">Endpoint</span>
+                        <span class="status-row-value" id="mcp-endpoint">--</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-row-label">Status</span>
+                        <span class="status-row-value" id="mcp-server-status">Running</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-row-label">Exposed Tools</span>
+                        <span class="status-row-value" id="mcp-tools-count">6</span>
+                    </div>
+                    <div style="margin-top: 16px;">
+                        <div class="form-label"><span>Claude Desktop Config</span></div>
+                        <div style="position: relative;">
+                            <pre id="mcp-claude-config" style="background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px; overflow-x: auto; white-space: pre; margin: 0; color: var(--foreground); font-family: monospace;"></pre>
+                            <button onclick="copyMcpConfig()" style="position: absolute; top: 8px; right: 8px; background: var(--border); border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; color: var(--foreground); font-size: 12px;" id="mcp-copy-btn">Copy</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MCP Client Connections Accordion -->
+            <div class="accordion" data-accordion="mcp-clients">
+                <div class="accordion-header" onclick="toggleAccordion('mcp-clients')">
+                    <span class="accordion-title">Connected MCP Servers</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <p style="color: var(--muted-foreground); margin-bottom: 16px;">
+                        Connect to external MCP servers to give DeskBuddy access to more tools.
+                    </p>
+                    <div id="mcp-servers-list">
+                        <p style="color: var(--muted-foreground); font-style: italic;">No MCP servers configured</p>
+                    </div>
+                    <div style="margin-top: 16px;">
+                        <button class="btn btn-primary" onclick="showAddMcpServer()">Add Server</button>
+                        <button class="btn btn-secondary" onclick="discoverMcpTools()" style="margin-left: 8px;">Refresh Tools</button>
+                    </div>
+                </div>
+            </div>
+        </section>
     </main>
+
+    <!-- MCP Server Add/Edit Modal -->
+    <div id="mcp-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span id="mcp-modal-title">Add MCP Server</span>
+                <button class="modal-close" onclick="closeMcpModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <div class="form-label"><span>Server Name</span></div>
+                    <input type="text" id="mcp-name" class="wifi-input" placeholder="Home Assistant">
+                </div>
+                <div class="form-group">
+                    <div class="form-label"><span>Server URL</span></div>
+                    <input type="text" id="mcp-url" class="wifi-input" placeholder="http://192.168.1.100:8080">
+                </div>
+                <div class="form-group">
+                    <div class="form-label"><span>API Key (optional)</span></div>
+                    <input type="password" id="mcp-apikey" class="wifi-input" placeholder="Optional authentication key">
+                </div>
+                <input type="hidden" id="mcp-edit-index" value="-1">
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeMcpModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveMcpServer()">Save</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         // Color presets matching device
@@ -1996,6 +2798,14 @@ String WebServerManager::generateSettingsPage() {
                 if (status.pomodoro) {
                     updatePomodoroUI(status.pomodoro);
                 }
+
+                // Countdown timer
+                if (status.timer) {
+                    updateTimerUI(status.timer);
+                }
+
+                // Reminders
+                updateRemindersUI(status.reminders);
 
                 // Current time
                 if (status.time) {
@@ -2085,6 +2895,10 @@ String WebServerManager::generateSettingsPage() {
                     setPomoSlider('longBreakMinutes', settings.pomodoro.longBreakMinutes, ' min');
                     setPomoSlider('sessionsBeforeLongBreak', settings.pomodoro.sessionsBeforeLongBreak, '');
                     document.getElementById('tickingEnabled').checked = settings.pomodoro.tickingEnabled;
+                }
+
+                if (settings.timer) {
+                    document.getElementById('timerTickingEnabled').checked = settings.timer.tickingEnabled;
                 }
 
                 if (time) {
@@ -2216,6 +3030,131 @@ String WebServerManager::generateSettingsPage() {
                 loadData();
             } catch (e) { showToast('Failed to stop', 'error'); }
         }
+
+        // Reminders
+        function updateRemindersUI(reminders) {
+            const list = document.getElementById('reminder-list');
+            if (!list) return;
+            if (!reminders || reminders.length === 0) {
+                list.innerHTML = '<div class="card" style="text-align:center;opacity:0.5;">No reminders set</div>';
+                return;
+            }
+            let html = '';
+            reminders.forEach((r, i) => {
+                const time = r.hour.toString().padStart(2,'0') + ':' + r.minute.toString().padStart(2,'0');
+                const badge = r.recurring ? ' <span style="color:#DFFF00;font-size:11px;">DAILY</span>' : '';
+                html += '<div class="card" style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;">';
+                html += '<div><span style="font-family:JetBrains Mono,monospace;color:#DFFF00;margin-right:10px;">' + time + '</span>';
+                html += '<span>' + r.message + '</span>' + badge + '</div>';
+                html += '<button style="background:#FF4444;color:#fff;border:none;border-radius:6px;width:28px;height:28px;min-width:28px;font-size:13px;cursor:pointer;flex-shrink:0;" onclick="deleteReminder(' + i + ')">&times;</button>';
+                html += '</div>';
+            });
+            list.innerHTML = html;
+        }
+
+        async function addReminder() {
+            const timeVal = document.getElementById('reminder-time').value;
+            const parts = timeVal.split(':');
+            const hour = parseInt(parts[0]) || 0;
+            const minute = parseInt(parts[1]) || 0;
+            const message = document.getElementById('reminder-message').value.trim();
+            const recurring = document.getElementById('reminder-recurring').checked;
+
+            if (!message) { showToast('Enter a message', 'error'); return; }
+
+            try {
+                const resp = await fetch('/api/reminders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ hour, minute, message, recurring })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast('Reminder added for ' + hour.toString().padStart(2,'0') + ':' + minute.toString().padStart(2,'0'));
+                    document.getElementById('reminder-message').value = '';
+                    document.getElementById('reminder-char-count').textContent = '0/48';
+                    loadData();
+                } else {
+                    showToast(data.error || 'Failed', 'error');
+                }
+            } catch (e) { showToast('Failed to add reminder', 'error'); }
+        }
+
+        async function deleteReminder(index) {
+            try {
+                await fetch('/api/reminders/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index })
+                });
+                showToast('Reminder deleted');
+                loadData();
+            } catch (e) { showToast('Failed to delete', 'error'); }
+        }
+
+        const reminderMsgEl = document.getElementById('reminder-message');
+        if (reminderMsgEl) reminderMsgEl.addEventListener('input', (e) => {
+            document.getElementById('reminder-char-count').textContent = e.target.value.length + '/48';
+        });
+
+        // Countdown Timer
+        function updateTimerUI(timer) {
+            const timeEl = document.getElementById('timer-time');
+            const stateEl = document.getElementById('timer-state');
+            const startBtn = document.getElementById('btn-timer-start');
+            const stopBtn = document.getElementById('btn-timer-stop');
+
+            if (timer && timer.active) {
+                const m = Math.floor(timer.remainingSeconds / 60);
+                const s = timer.remainingSeconds % 60;
+                timeEl.textContent = m + ':' + s.toString().padStart(2, '0');
+                stateEl.textContent = timer.name || 'Running';
+                startBtn.classList.add('hidden');
+                stopBtn.classList.remove('hidden');
+            } else {
+                timeEl.textContent = '--:--';
+                stateEl.textContent = 'Ready';
+                startBtn.classList.remove('hidden');
+                stopBtn.classList.add('hidden');
+            }
+        }
+
+        async function startCountdown() {
+            const minutes = parseInt(document.getElementById('timerMinutes').value) || 5;
+            try {
+                await fetch('/api/timer/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ minutes: minutes })
+                });
+                showToast('Timer started: ' + minutes + ' min');
+                loadData();
+            } catch (e) { showToast('Failed to start timer', 'error'); }
+        }
+
+        async function stopCountdown() {
+            try {
+                await fetch('/api/timer/stop', { method: 'POST' });
+                showToast('Timer stopped');
+                loadData();
+            } catch (e) { showToast('Failed to stop timer', 'error'); }
+        }
+
+        // Timer slider
+        const timerMinEl = document.getElementById('timerMinutes');
+        if (timerMinEl) timerMinEl.addEventListener('input', (e) => {
+            document.getElementById('timerMinutes-val').textContent = e.target.value + ' min';
+        });
+
+        // Timer ticking toggle
+        const timerTickEl = document.getElementById('timerTickingEnabled');
+        if (timerTickEl) timerTickEl.addEventListener('change', (e) => {
+            fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timerTickingEnabled: e.target.checked })
+            });
+        });
 
         // Time dropdowns
         const hourSel = document.getElementById('time-hour');
@@ -2568,6 +3507,299 @@ String WebServerManager::generateSettingsPage() {
                 showToast('Failed to start breathing', 'error');
             }
         }
+
+        // ============== ASSISTANT FUNCTIONS ==============
+
+        async function loadAssistantStatus() {
+            try {
+                const resp = await fetch('/api/assistant/status');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    document.getElementById('assistant-state').textContent = data.state || 'Idle';
+                    document.getElementById('assistant-tokens').textContent =
+                        (data.contextTokens || 0) + ' / 8000';
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        async function clearAssistantHistory() {
+            if (!confirm('Clear conversation history?')) return;
+            try {
+                await fetch('/api/assistant/clear', { method: 'POST' });
+                showToast('History cleared');
+                loadAssistantStatus();
+            } catch (e) {
+                showToast('Failed to clear history', 'error');
+            }
+        }
+
+        async function loadMcpServers() {
+            try {
+                const resp = await fetch('/api/mcp/servers');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    updateMcpServersList(data.servers || []);
+                    const host = location.hostname;
+                    document.getElementById('mcp-endpoint').textContent =
+                        'http://' + host + ':3001/sse';
+                    const config = JSON.stringify({
+                        "deskbuddy": {
+                            "command": "npx",
+                            "args": ["-y", "mcp-remote", "http://" + host + ":3001/sse", "--allow-http"]
+                        }
+                    }, null, 2);
+                    document.getElementById('mcp-claude-config').textContent = config;
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        function copyMcpConfig() {
+            const text = document.getElementById('mcp-claude-config').textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = document.getElementById('mcp-copy-btn');
+                btn.textContent = 'Copied!';
+                setTimeout(() => btn.textContent = 'Copy', 2000);
+            });
+        }
+
+        function updateMcpServersList(servers) {
+            const container = document.getElementById('mcp-servers-list');
+            if (servers.length === 0) {
+                container.innerHTML = '<p style="color: var(--muted-foreground); font-style: italic;">No MCP servers configured</p>';
+                return;
+            }
+            container.innerHTML = servers.map((s, i) => `
+                <div class="status-row" style="align-items: flex-start;">
+                    <div>
+                        <span class="status-dot" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: ${s.connected ? 'var(--status-active)' : 'var(--destructive)'};"></span>
+                        <strong>${s.name}</strong>
+                        <div style="color: var(--muted-foreground); font-size: 12px; margin-left: 16px;">${s.url}</div>
+                        ${s.toolCount ? '<div style="color: var(--muted-foreground); font-size: 12px; margin-left: 16px;">' + s.toolCount + ' tools</div>' : ''}
+                        ${s.error ? '<div style="color: var(--destructive); font-size: 12px; margin-left: 16px;">' + s.error + '</div>' : ''}
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-secondary" onclick="editMcpServer(${i})" style="padding: 4px 12px;">Edit</button>
+                        <button class="btn btn-danger" onclick="deleteMcpServer(${i})" style="padding: 4px 12px;">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function showAddMcpServer() {
+            document.getElementById('mcp-modal-title').textContent = 'Add MCP Server';
+            document.getElementById('mcp-name').value = '';
+            document.getElementById('mcp-url').value = '';
+            document.getElementById('mcp-apikey').value = '';
+            document.getElementById('mcp-edit-index').value = '-1';
+            document.getElementById('mcp-modal').style.display = 'flex';
+        }
+
+        async function editMcpServer(index) {
+            try {
+                const resp = await fetch('/api/mcp/servers');
+                const data = await resp.json();
+                const server = data.servers[index];
+                if (server) {
+                    document.getElementById('mcp-modal-title').textContent = 'Edit MCP Server';
+                    document.getElementById('mcp-name').value = server.name;
+                    document.getElementById('mcp-url').value = server.url;
+                    document.getElementById('mcp-apikey').value = '';
+                    document.getElementById('mcp-edit-index').value = index;
+                    document.getElementById('mcp-modal').style.display = 'flex';
+                }
+            } catch (e) {
+                showToast('Failed to load server', 'error');
+            }
+        }
+
+        function closeMcpModal() {
+            document.getElementById('mcp-modal').style.display = 'none';
+        }
+
+        async function saveMcpServer() {
+            const name = document.getElementById('mcp-name').value.trim();
+            const url = document.getElementById('mcp-url').value.trim();
+            const apiKey = document.getElementById('mcp-apikey').value;
+            const editIndex = parseInt(document.getElementById('mcp-edit-index').value);
+
+            if (!name || !url) {
+                showToast('Name and URL required', 'error');
+                return;
+            }
+
+            try {
+                const endpoint = editIndex >= 0 ? '/api/mcp/servers/' + editIndex : '/api/mcp/servers';
+                const method = editIndex >= 0 ? 'PUT' : 'POST';
+                await fetch(endpoint, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, url, apiKey })
+                });
+                closeMcpModal();
+                showToast('Server saved');
+                loadMcpServers();
+            } catch (e) {
+                showToast('Failed to save server', 'error');
+            }
+        }
+
+        async function deleteMcpServer(index) {
+            if (!confirm('Delete this MCP server?')) return;
+            try {
+                await fetch('/api/mcp/servers/' + index, { method: 'DELETE' });
+                showToast('Server deleted');
+                loadMcpServers();
+            } catch (e) {
+                showToast('Failed to delete server', 'error');
+            }
+        }
+
+        async function discoverMcpTools() {
+            try {
+                showToast('Discovering tools...');
+                await fetch('/api/mcp/discover', { method: 'POST' });
+                loadMcpServers();
+                showToast('Tools refreshed');
+            } catch (e) {
+                showToast('Discovery failed', 'error');
+            }
+        }
+
+        function updateLlmKeyPlaceholder() {
+            const provider = document.getElementById('llm-provider').value;
+            const label = document.getElementById('llm-key-label');
+            const input = document.getElementById('llm-api-key');
+            if (provider === 'openai') {
+                label.textContent = 'OpenAI API Key';
+                input.placeholder = 'sk-...';
+            } else {
+                label.textContent = 'Claude API Key';
+                input.placeholder = 'sk-ant-...';
+            }
+        }
+
+        async function testLlmApi() {
+            const key = document.getElementById('llm-api-key').value;
+            const provider = document.getElementById('llm-provider').value;
+            try {
+                const resp = await fetch('/api/assistant/test/llm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ apiKey: key, provider })
+                });
+                const data = await resp.json();
+                showToast(data.success ? 'LLM API OK' : 'LLM API failed: ' + data.error, data.success ? 'success' : 'error');
+            } catch (e) {
+                showToast('Test failed', 'error');
+            }
+        }
+
+        async function testVoiceApi() {
+            const key = document.getElementById('openai-voice-key').value;
+            try {
+                const resp = await fetch('/api/assistant/test/voice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ apiKey: key })
+                });
+                const data = await resp.json();
+                showToast(data.success ? 'Voice API OK' : 'Voice API failed: ' + data.error, data.success ? 'success' : 'error');
+            } catch (e) {
+                showToast('Test failed', 'error');
+            }
+        }
+
+        async function previewVoice() {
+            const voice = document.getElementById('tts-voice').value;
+            try {
+                await fetch('/api/assistant/preview-voice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ voice })
+                });
+                showToast('Playing voice preview');
+            } catch (e) {
+                showToast('Preview failed', 'error');
+            }
+        }
+
+        async function saveAssistantSettings() {
+            const settings = {
+                llmProvider: document.getElementById('llm-provider').value,
+                llmApiKey: document.getElementById('llm-api-key').value,
+                openaiVoiceKey: document.getElementById('openai-voice-key').value,
+                ttsVoice: document.getElementById('tts-voice').value,
+                ttsSpeed: parseFloat(document.getElementById('tts-speed').value),
+                wakeWordEnabled: document.getElementById('wake-word-enabled').checked,
+                pttEnabled: document.getElementById('ptt-enabled').checked,
+                wakeSensitivity: parseInt(document.getElementById('wake-sensitivity').value),
+                systemPrompt: document.getElementById('system-prompt').value
+            };
+            try {
+                await fetch('/api/assistant/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+                showToast('Assistant settings saved');
+            } catch (e) {
+                showToast('Failed to save settings', 'error');
+            }
+        }
+
+        async function loadAssistantSettings() {
+            try {
+                const resp = await fetch('/api/assistant/settings');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.llmProvider) {
+                        document.getElementById('llm-provider').value = data.llmProvider;
+                        updateLlmKeyPlaceholder();
+                    }
+                    if (data.llmApiKey) document.getElementById('llm-api-key').value = data.llmApiKey;
+                    if (data.openaiVoiceKey) document.getElementById('openai-voice-key').value = data.openaiVoiceKey;
+                    if (data.ttsVoice) document.getElementById('tts-voice').value = data.ttsVoice;
+                    if (data.ttsSpeed) {
+                        document.getElementById('tts-speed').value = data.ttsSpeed;
+                        document.getElementById('tts-speed-val').textContent = data.ttsSpeed + 'x';
+                    }
+                    if (data.wakeWordEnabled !== undefined) document.getElementById('wake-word-enabled').checked = data.wakeWordEnabled;
+                    if (data.pttEnabled !== undefined) document.getElementById('ptt-enabled').checked = data.pttEnabled;
+                    if (data.wakeSensitivity !== undefined) {
+                        document.getElementById('wake-sensitivity').value = data.wakeSensitivity;
+                        document.getElementById('wake-sensitivity-val').textContent = data.wakeSensitivity + '%';
+                    }
+                    if (data.systemPrompt) document.getElementById('system-prompt').value = data.systemPrompt;
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        // Assistant slider handlers
+        document.getElementById('tts-speed')?.addEventListener('input', function() {
+            document.getElementById('tts-speed-val').textContent = this.value + 'x';
+        });
+        document.getElementById('wake-sensitivity')?.addEventListener('input', function() {
+            document.getElementById('wake-sensitivity-val').textContent = this.value + '%';
+        });
+
+        // Load assistant data when tab is selected
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                if (tab.dataset.tab === 'assistant') {
+                    loadAssistantStatus();
+                    loadMcpServers();
+                }
+            });
+        });
+
+        // Load settings when settings accordion opens
+        const origToggleAccordion = window.toggleAccordion;
+        window.toggleAccordion = function(name) {
+            if (name === 'assistant-settings') {
+                loadAssistantSettings();
+            }
+            if (origToggleAccordion) origToggleAccordion(name);
+        };
 
         // Init
         loadData();

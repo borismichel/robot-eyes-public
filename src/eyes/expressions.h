@@ -27,6 +27,8 @@ enum class Emotion {
     ANNOYED,
     SCARED,
     SLEEPY,
+    LISTENING,  // Voice assistant listening state
+    THINKING,   // Voice assistant processing state
 
     COUNT  // Number of emotions
 };
@@ -212,9 +214,64 @@ inline Expression get_expression(Emotion emotion) {
             return Expression::symmetric_expr(sleepy);
         }
 
+        case Emotion::LISTENING: {
+            // Wide open, attentive look - like surprised but softer
+            EyeParams listening = base;
+            listening.height = 0.85f;       // Open wide
+            listening.width = 0.9f;
+            listening.corner_radius = 0.4f; // Soft rounded
+            listening.y_offset = -0.05f;    // Slightly looking up (attentive)
+            return Expression::symmetric_expr(listening);
+        }
+
+        case Emotion::THINKING: {
+            // Focused upward gaze, like pondering
+            EyeParams thinking = base;
+            thinking.height = 0.65f;
+            thinking.width = 0.85f;
+            thinking.y_offset = -0.25f;     // Looking up (thinking)
+            thinking.x_offset = 0.15f;      // Looking slightly to the side
+            thinking.top_lid = 0.15f;       // Slightly squinted
+            return Expression::symmetric_expr(thinking);
+        }
+
         default:
             return Expression::symmetric_expr(base);
     }
+}
+
+/**
+ * Parse emotion from string (for LLM responses)
+ * Returns Emotion::NEUTRAL if not recognized
+ */
+inline Emotion parse_emotion(const char* name) {
+    if (!name || strlen(name) == 0) return Emotion::NEUTRAL;
+
+    // Convert to lowercase for comparison
+    String lower = String(name);
+    lower.toLowerCase();
+
+    if (lower == "neutral") return Emotion::NEUTRAL;
+    if (lower == "happy" || lower == "joy") return Emotion::HAPPY;
+    if (lower == "sad" || lower == "unhappy") return Emotion::SAD;
+    if (lower == "surprised" || lower == "surprise") return Emotion::SURPRISED;
+    if (lower == "angry" || lower == "anger") return Emotion::ANGRY;
+    if (lower == "suspicious") return Emotion::SUSPICIOUS;
+    if (lower == "tired") return Emotion::TIRED;
+    if (lower == "excited" || lower == "excitement") return Emotion::EXCITED;
+    if (lower == "confused" || lower == "confusion") return Emotion::CONFUSED;
+    if (lower == "focused" || lower == "focus") return Emotion::FOCUSED;
+    if (lower == "shy") return Emotion::SHY;
+    if (lower == "love" || lower == "loving") return Emotion::LOVE;
+    if (lower == "dizzy") return Emotion::DIZZY;
+    if (lower == "annoyed" || lower == "annoyance") return Emotion::ANNOYED;
+    if (lower == "scared" || lower == "fear") return Emotion::SCARED;
+    if (lower == "sleepy") return Emotion::SLEEPY;
+    if (lower == "listening") return Emotion::LISTENING;
+    if (lower == "thinking" || lower == "thoughtful") return Emotion::THINKING;
+    if (lower == "curious" || lower == "curiosity") return Emotion::CONFUSED;  // Map curious to confused look
+
+    return Emotion::NEUTRAL;
 }
 
 /**
@@ -238,6 +295,8 @@ inline const char* emotion_name(Emotion emotion) {
         case Emotion::ANNOYED:    return "Annoyed";
         case Emotion::SCARED:     return "Scared";
         case Emotion::SLEEPY:     return "Sleepy";
+        case Emotion::LISTENING:  return "Listening";
+        case Emotion::THINKING:   return "Thinking";
         default:                  return "Unknown";
     }
 }

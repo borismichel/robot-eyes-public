@@ -1,6 +1,6 @@
 # DeskBuddy
 
-Expressive robot eyes for ESP32-S3 with AMOLED display, inspired by Anki's Cozmo robot.
+Expressive robot eyes for ESP32-S3 with AMOLED display, voice assistant, and MCP integration. Inspired by Anki's Cozmo robot.
 
 **Target Hardware:** [Waveshare ESP32-S3-Touch-AMOLED-1.8](https://www.waveshare.com/esp32-s3-touch-amoled-1.8.htm)
 
@@ -29,6 +29,27 @@ Expressive robot eyes for ESP32-S3 with AMOLED display, inspired by Anki's Cozmo
 | Face down | Hiding/shy expression |
 | Loud noise | Grumpy/irritated |
 
+### Voice Assistant
+- **LLM**: Claude (Sonnet 4) or OpenAI (GPT-4o), user-configurable
+- **Speech-to-Text**: OpenAI Whisper (streaming 16kHz mono)
+- **Text-to-Speech**: OpenAI TTS
+- **Wake word**: ESP-SR local detection ("Hey Buddy"), no cloud required
+- **Tool use**: LLM can control expressions, timers, reminders, sounds, and settings
+- **Full-duplex audio**: Simultaneous TTS output and STT input via ES8311 codec
+
+### MCP Integration
+- **MCP Server** (port 3001): Exposes DeskBuddy tools to external Claude instances via SSE transport
+- **MCP Client**: Connects to external MCP servers for additional tool discovery (up to 8 servers, 16 tools each)
+- **14 device tools** available via both LLM and MCP:
+  - `set_expression` - Change facial expression (18 named expressions)
+  - `set_timer` / `cancel_timer` - Countdown timer with on-screen progress
+  - `start_pomodoro` / `stop_pomodoro` - Productivity timer
+  - `get_device_info` - Device status (expression, WiFi, timers, volume, brightness, eye color)
+  - `play_sound` - Audio feedback (happy, sad, alert, confirm, error)
+  - `set_reminder` / `cancel_reminder` / `list_reminders` - Timed reminders
+  - `start_breathing` - Guided box breathing exercise
+  - `set_volume` / `set_brightness` / `set_eye_color` - Device settings control
+
 ### Time & Mood
 - **NTP time sync**: Automatic time synchronization when WiFi is connected
 - **Timezone support**: Configurable GMT offset (-12 to +14 hours)
@@ -41,11 +62,27 @@ Expressive robot eyes for ESP32-S3 with AMOLED display, inspired by Anki's Cozmo
   - Night (10pm-6am): Sleepy, heavy lids
 - **Sleep cycle**: After 30 min inactivity → yawn → drowsy → sleep with breathing animation
 
-### Pomodoro Timer
+### Productivity Tools
+
+#### Pomodoro Timer
 - Classic technique: Work → Short Break → repeat → Long Break
 - **Visual**: Large countdown + 16px progress bar frame (depletes clockwise)
 - **Audio**: Optional tick sound in last 60 seconds
 - **Configurable**: Work (1-60 min), breaks (1-60 min), sessions (1-8)
+
+#### Countdown Timer
+- Standalone timer with on-screen countdown and progress display
+- Celebration animation when done
+- Controllable via web UI, voice assistant, or MCP
+
+#### Timed Reminders
+- Up to 20 reminders with hour:minute trigger time
+- Message displayed on screen in large text (max 48 chars) + alert sound
+- One-shot or recurring (daily)
+- Snooze (5 min) or dismiss via touch
+- Auto-snooze after 60 seconds of no interaction
+- Persisted to NVS across reboots
+- Manageable via web UI, voice assistant, or MCP
 
 ### Breathing Exercise
 - **Box breathing**: 5-5-5-5 pattern (inhale, hold, exhale, hold)
@@ -53,19 +90,20 @@ Expressive robot eyes for ESP32-S3 with AMOLED display, inspired by Anki's Cozmo
 - **Visual**: Progress bar fills/empties with breath, phase text overlay (IN/HOLD/OUT)
 - **Scheduled reminders**: Configurable interval (1-8 hours), active hours
 - **Post-exercise**: Content (3s) → Relaxed (60s) calm-down animation
-- **Access**: Settings menu → Mindfulness, or web UI Productivity tab
+- **Access**: Settings menu → Mindfulness, web UI, or MCP tool
 
 ### WiFi & Remote Control
 - **First boot**: Setup screen with "Configure WiFi" or "Use Offline" options
 - **Setup**: Connect to `DeskBuddy-Setup` AP (password: `deskbuddy`), configure via web
 - **Offline mode**: Eyes show normally, AP runs silently for optional web access
 - **Access**: `http://deskbuddy.local` or `http://192.168.4.1` (AP mode)
-- **Web UI tabs**: Dashboard, Display, Audio, Time, WiFi, Pomodoro, Expressions
+- **Web UI tabs**: Dashboard, Productivity, Mindfulness, Assistant, Settings, Expressions
 - **Dashboard**: Status, WiFi, IP, Current Mood, Time, Uptime
-- **Expression preview**: Click any of 30 expressions to preview live, current mood indicator
+- **Expression preview**: Click any of 32 expressions to preview live, current mood indicator
 - **Audio test**: Test speaker output from web UI
 - **Disable WiFi**: Completely turn off WiFi from web UI or device settings
 - **Factory reset**: Hold BOOT button 5+ seconds
+- **OTA updates**: Drag-and-drop firmware upload with rollback support
 
 ---
 
@@ -105,7 +143,7 @@ pio device monitor
 
 **Offline Mode**: If you choose "Use Offline", eyes display normally but the AP remains running silently. You can still configure settings via web at any time by connecting to the AP.
 
-**Disable WiFi**: To completely turn off WiFi (no AP, no network), use the device settings menu (Settings → WiFi → tap to toggle) or the web UI (WiFi tab → Disable WiFi).
+**Disable WiFi**: To completely turn off WiFi (no AP, no network), use the device settings menu (Settings → WiFi → tap to toggle) or the web UI (Settings tab → WiFi → Disable WiFi).
 
 ---
 
@@ -114,7 +152,7 @@ pio device monitor
 ### On-Device Settings
 Open with 2-finger tap, swipe up/down to navigate:
 
-**Main Menu** → Pomodoro | Settings | Mindfulness | Exit
+**Main Menu** → Pomodoro | Mindfulness | Settings | Exit
 
 **Pomodoro**: Start/Stop, Work duration, Short break, Long break, Sessions, Ticking, Back
 
@@ -124,16 +162,14 @@ Open with 2-finger tap, swipe up/down to navigate:
 
 ### Web Interface
 
-| Tab | Controls |
+| Tab | Contents |
 |-----|----------|
 | Dashboard | Status cards, current mood, quick volume/brightness sliders |
-| Display | Brightness, eye color picker |
-| Audio | Volume, mic gain, mic threshold, test audio button |
-| Time | Hour/minute, 12H/24H toggle, timezone (GMT offset) |
-| WiFi | Status, scan networks, connect, forget, NTP sync status |
-| Productivity | Pomodoro settings, Breathing exercise settings |
+| Productivity | Reminders, Countdown Timer, Pomodoro Timer |
+| Mindfulness | Box Breathing settings and schedule |
+| Assistant | LLM provider (Claude/OpenAI), API keys, voice settings, push-to-talk, MCP servers |
+| Settings | Display, Audio, Time, WiFi, System (OTA, restart, rollback) |
 | Expressions | Current mood indicator, grid of 32 buttons for live preview |
-| System | Firmware version, OTA updates, restart, rollback |
 
 ### REST API
 
@@ -143,9 +179,19 @@ Open with 2-finger tap, swipe up/down to navigate:
 | `/api/settings` | GET/POST | All device settings (incl. breathing schedule) |
 | `/api/expression` | POST | Preview expression (index: 0-31) |
 | `/api/audio/test` | POST | Play test sound |
-| `/api/pomodoro/start` | POST | Start timer |
-| `/api/pomodoro/stop` | POST | Stop timer |
+| `/api/pomodoro/start` | POST | Start Pomodoro timer |
+| `/api/pomodoro/stop` | POST | Stop Pomodoro timer |
+| `/api/timer/start` | POST | Start countdown timer |
+| `/api/timer/stop` | POST | Stop countdown timer |
+| `/api/reminders` | GET | List all reminders |
+| `/api/reminders` | POST | Add reminder (hour, minute, message, recurring) |
+| `/api/reminders/delete` | POST | Delete reminder by index |
 | `/api/breathing/start` | POST | Start breathing exercise |
+| `/api/assistant/status` | GET | Voice assistant status |
+| `/api/assistant/clear` | POST | Clear conversation history |
+| `/api/assistant/settings` | GET/POST | LLM provider, API keys, voice config |
+| `/api/mcp/servers` | GET/POST | Manage MCP client connections |
+| `/api/mcp/discover` | POST | Discover MCP server tools |
 | `/api/wifi/scan` | GET | Available networks |
 | `/api/wifi/connect` | POST | Connect (ssid, password) |
 | `/api/wifi/forget` | POST | Clear credentials |
@@ -153,8 +199,27 @@ Open with 2-finger tap, swipe up/down to navigate:
 | `/api/time` | GET/POST | Device clock |
 | `/api/system/info` | GET | Firmware version, memory stats |
 | `/api/ota/upload` | POST | Upload firmware binary |
+| `/api/ota/status` | GET | OTA progress |
+| `/api/ota/cancel` | POST | Cancel OTA upload |
 | `/api/system/restart` | POST | Restart device |
 | `/api/system/rollback` | POST | Rollback to previous firmware |
+
+### MCP Server
+
+DeskBuddy exposes an MCP server on port 3001 using HTTP+SSE transport. Connect from Claude Desktop or any MCP client using `mcp-remote`:
+
+```json
+{
+  "mcpServers": {
+    "deskbuddy": {
+      "command": "npx",
+      "args": ["mcp-remote", "http://DEVICE_IP:3001/sse"]
+    }
+  }
+}
+```
+
+**Available tools:** `set_expression`, `set_timer`, `cancel_timer`, `start_pomodoro`, `stop_pomodoro`, `get_device_info`, `play_sound`, `set_reminder`, `cancel_reminder`, `list_reminders`, `start_breathing`, `set_volume`, `set_brightness`, `set_eye_color`
 
 ---
 
@@ -162,17 +227,19 @@ Open with 2-finger tap, swipe up/down to navigate:
 
 ```
 src/
-├── main.cpp                 # Application loop
-├── eyes/                    # Parametric eye rendering
-├── behavior/                # Expressions, idle, sleep, mood, breathing
-├── input/                   # IMU and audio handlers
-├── audio/                   # MP3 playback
-├── ui/                      # Settings menu, pomodoro
-├── network/                 # WiFi, web server, captive portal, OTA
-└── animation/               # Tweening utilities
+├── main.cpp                 # Application loop, touch/render/callbacks
+├── eyes/                    # Parametric eye rendering (shape, renderer, params)
+├── animation/               # Tweening utilities (smooth interpolation, easing)
+├── behavior/                # Expressions, idle, sleep, mood, breathing exercise
+├── input/                   # IMU handler, audio handler
+├── audio/                   # MP3 playback, I2S duplex driver
+├── ui/                      # Settings menu, pomodoro, countdown timer, reminders
+├── assistant/               # Voice assistant, LLM client, STT/TTS, MCP server/client, wake word, device tools
+├── network/                 # WiFi manager, web server, captive portal, OTA manager
+└── display/                 # Display driver (SH8601 AMOLED + LVGL)
 
-data/                        # Audio files (happy, confused, yawn, tick, breathe_reminder)
-lib/                         # Waveshare GFX, ES8311 driver
+data/                        # Audio files (happy, confused, yawn, tick, breathe_reminder, joy, etc.)
+lib/                         # Waveshare GFX, ES8311 driver, Adafruit BusIO
 include/                     # version.h, pin_config.h
 ```
 
@@ -221,12 +288,14 @@ The display is physically rotated 90° CCW:
 
 - **Rendering**: 30fps software per-pixel evaluation, RGB565 framebuffer
 - **Optimization**: Dirty-rect clearing, partial screen blit, shape-aware bounds
-- **Processing**: Display on Core 1, audio on Core 0
-- **Storage**: Settings persisted via Preferences, audio via LittleFS
+- **Processing**: Display on Core 1, audio decoding on Core 0, MCP server on dedicated task
+- **Storage**: Settings persisted via Preferences (NVS), audio via LittleFS
 
 ### Dependencies
 - `lvgl/lvgl@^8.4.0` - Display driver
 - `earlephilhower/ESP8266Audio@^1.9.7` - MP3 decoding
+- `bblanchon/ArduinoJson@^7.0.0` - JSON parsing
+- `links2004/WebSockets@^2.4.1` - WebSocket support
 - GFX Library for Arduino (Waveshare)
 - ES8311 codec driver
 

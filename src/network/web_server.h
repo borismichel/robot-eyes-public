@@ -39,6 +39,8 @@ class PomodoroTimer;
 class WiFiManager;
 class OtaManager;
 class BreathingExercise;
+class CountdownTimer;
+class ReminderManager;
 
 // Expression preview callback type
 typedef void (*ExpressionCallback)(int expressionIndex);
@@ -113,6 +115,18 @@ public:
      */
     void setBreathingExercise(BreathingExercise* breathing) { breathingExercise = breathing; }
 
+    /**
+     * @brief Set countdown timer instance
+     * @param timer Pointer to CountdownTimer
+     */
+    void setCountdownTimer(CountdownTimer* timer) { countdownTimer = timer; }
+
+    /**
+     * @brief Set reminder manager instance
+     * @param manager Pointer to ReminderManager
+     */
+    void setReminderManager(ReminderManager* manager) { reminderManager = manager; }
+
 private:
     ExpressionCallback expressionCallback;
     AudioTestCallback audioTestCallback;
@@ -123,6 +137,8 @@ private:
     WiFiManager* wifiManager;
     OtaManager* otaManager;
     BreathingExercise* breathingExercise;
+    CountdownTimer* countdownTimer;
+    ReminderManager* reminderManager;
     bool settingsChanged;
 
     // Static handler wrappers (esp_http_server requires C-style callbacks)
@@ -138,6 +154,11 @@ private:
     static esp_err_t handlePostTime(httpd_req_t* req);
     static esp_err_t handlePomodoroStart(httpd_req_t* req);
     static esp_err_t handlePomodoroStop(httpd_req_t* req);
+    static esp_err_t handleTimerStart(httpd_req_t* req);
+    static esp_err_t handleTimerStop(httpd_req_t* req);
+    static esp_err_t handleGetReminders(httpd_req_t* req);
+    static esp_err_t handlePostReminder(httpd_req_t* req);
+    static esp_err_t handleDeleteReminder(httpd_req_t* req);
     static esp_err_t handlePostExpression(httpd_req_t* req);
     static esp_err_t handleAudioTest(httpd_req_t* req);
 
@@ -151,6 +172,17 @@ private:
 
     // Breathing/Wellness handlers
     static esp_err_t handleBreathingStart(httpd_req_t* req);
+
+    // Assistant handlers
+    static esp_err_t handleAssistantStatus(httpd_req_t* req);
+    static esp_err_t handleAssistantClear(httpd_req_t* req);
+    static esp_err_t handleGetAssistantSettings(httpd_req_t* req);
+    static esp_err_t handlePostAssistantSettings(httpd_req_t* req);
+
+    // MCP handlers
+    static esp_err_t handleGetMcpServers(httpd_req_t* req);
+    static esp_err_t handlePostMcpServer(httpd_req_t* req);
+    static esp_err_t handleMcpDiscover(httpd_req_t* req);
 
     // Helper to get WebServerManager instance from request context
     static WebServerManager* getInstance(httpd_req_t* req);

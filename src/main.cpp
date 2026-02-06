@@ -20,11 +20,15 @@
 #include "audio/audio_player.h"
 #include "ui/settings_menu.h"
 #include "ui/pomodoro.h"
+#include "ui/countdown_timer.h"
+#include "ui/reminder_manager.h"
 #include "network/wifi_manager.h"
 #include "network/web_server.h"
 #include "network/captive_portal.h"
 #include "network/ota_manager.h"
 #include "behavior/breathing_exercise.h"
+#include "assistant/mcp_server.h"
+#include "assistant/device_tools.h"
 
 #define SCREEN_WIDTH  368
 #define SCREEN_HEIGHT 448
@@ -72,11 +76,13 @@ SleepBehavior sleepBehavior;
 AudioPlayer audioPlayer;
 SettingsMenu settingsMenu;
 PomodoroTimer pomodoroTimer;
+CountdownTimer countdownTimer;
 WiFiManager wifiManager;
 WebServerManager webServer;
 CaptivePortal captivePortal;
 OtaManager otaManager;
 BreathingExercise breathingExercise;
+ReminderManager reminderManager;
 
 // Current expression
 Expression currentExpression = Expression::Neutral;
@@ -162,6 +168,12 @@ Expression expressionBeforePomodoro = Expression::Neutral;
 PomodoroState lastPomodoroState = PomodoroState::Idle;
 uint32_t lastPomodoroTick = 0;  // For tick sound timing
 int lastRenderedFilledLen = -1;  // Progress bar cache (prevents flicker)
+
+// Countdown timer state
+bool countdownExpressActive = false;
+Expression expressionBeforeCountdown = Expression::Neutral;
+CountdownState lastCountdownState = CountdownState::Idle;
+uint32_t lastCountdownTick = 0;
 
 // Breathing exercise post-completion state
 uint32_t breathingContentUntil = 0;   // When Content phase ends (after exercise)
@@ -380,6 +392,24 @@ bool readTouch() {
     uint8_t xl = Wire.read();
     uint8_t yh = Wire.read();
     uint8_t yl = Wire.read();
+
+    // If reminder is showing, handle Snooze/OK buttons
+    if (reminderManager.isShowing()) {
+        if (touchCount == 0 && wasTouching) {
+            int16_t rawY = ((yh & 0x0F) << 8) | yl;
+            // Left half (rawY >= 224) = SNOOZE, Right half (rawY < 224) = OK
+            if (rawY >= 224) {
+                reminderManager.snooze();
+                Serial.println("Reminder: Snooze tapped (left half)");
+            } else {
+                reminderManager.dismiss();
+                Serial.println("Reminder: OK tapped (right half)");
+            }
+        }
+        isTouching = touchCount > 0;
+        wasTouching = isTouching;
+        return false;
+    }
 
     // If breathing exercise prompt is showing, handle Start/Skip buttons
     if (breathingExercise.isShowingPrompt()) {
@@ -1501,6 +1531,10 @@ void setup() {
     // Initialize pomodoro timer and connect to settings menu
     pomodoroTimer.begin();
     settingsMenu.setPomodoroTimer(&pomodoroTimer);
+    countdownTimer.begin();
+
+    // Initialize reminder manager
+    reminderManager.begin();
 
     // Initialize breathing exercise and connect to settings menu
     breathingExercise.begin();
@@ -1551,6 +1585,96 @@ void setup() {
     webServer.setAudioTestCallback(onWebAudioTest);
     webServer.setMoodGetterCallback(getCurrentMood);
     webServer.setBreathingExercise(&breathingExercise);
+    webServer.setCountdownTimer(&countdownTimer);
+    webServer.setReminderManager(&reminderManager);
+
+    // Wire up MCP device tool callbacks
+    deviceToolCallbacks.onSetExpression = [](const char* expression, int durationMs) {
+        Expression expr = parseExpression(expression);
+        setExpression(expr);
+    };
+    deviceToolCallbacks.onSetTimer = [](int seconds, const char* name) {
+        countdownTimer.start(seconds, name);
+    };
+    deviceToolCallbacks.onCancelTimer = []() {
+        countdownTimer.stop();
+    };
+    deviceToolCallbacks.onStartPomodoro = [](int workMin, int breakMin) {
+        pomodoroTimer.setWorkMinutes(workMin);
+        pomodoroTimer.setShortBreakMinutes(breakMin);
+        pomodoroTimer.start();
+    };
+    deviceToolCallbacks.onStopPomodoro = []() {
+        pomodoroTimer.stop();
+    };
+    deviceToolCallbacks.onGetDeviceInfo = []() -> String {
+        JsonDocument doc;
+        doc["expression"] = getExpressionName(currentExpression);
+        doc["wifi_rssi"] = WiFi.RSSI();
+        doc["ip"] = WiFi.localIP().toString();
+        doc["uptime_seconds"] = millis() / 1000;
+        doc["free_heap"] = ESP.getFreeHeap();
+        doc["volume"] = settingsMenu.getVolume();
+        doc["brightness"] = settingsMenu.getBrightness();
+        doc["eye_color"] = COLOR_PRESET_NAMES[settingsMenu.getColorIndex()];
+        doc["pomodoro_active"] = pomodoroTimer.isActive();
+        if (pomodoroTimer.isActive()) {
+            doc["pomodoro_remaining_seconds"] = pomodoroTimer.getRemainingSeconds();
+        }
+        String output;
+        serializeJson(doc, output);
+        return output;
+    };
+    deviceToolCallbacks.onPlaySound = [](const char* sound) {
+        String path = "/";
+        path += sound;
+        path += ".mp3";
+        audioPlayer.play(path.c_str());
+    };
+    deviceToolCallbacks.onSetReminder = [](int hour, int minute, const char* msg, bool recurring) -> bool {
+        return reminderManager.add(hour, minute, msg, recurring);
+    };
+    deviceToolCallbacks.onCancelReminder = [](const char* msg) -> bool {
+        return reminderManager.removeByMessage(msg);
+    };
+    deviceToolCallbacks.onListReminders = []() -> String {
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+        for (const auto& r : reminderManager.getReminders()) {
+            JsonObject obj = arr.add<JsonObject>();
+            obj["hour"] = r.hour;
+            obj["minute"] = r.minute;
+            obj["message"] = r.message;
+            obj["recurring"] = r.recurring;
+        }
+        String output;
+        serializeJson(doc, output);
+        return output;
+    };
+    deviceToolCallbacks.onStartBreathing = []() {
+        breathingExercise.triggerNow();  // Idle/Disabled → ShowingPrompt
+        breathingExercise.start();       // ShowingPrompt → Confirmation → exercise
+    };
+    deviceToolCallbacks.onSetVolume = [](int volume) {
+        settingsMenu.setVolume(volume);
+        audioPlayer.setVolume(volume);
+    };
+    deviceToolCallbacks.onSetBrightness = [](int brightness) {
+        settingsMenu.setBrightness(brightness);
+        gfx->setBrightness((brightness * 255) / 100);
+    };
+    deviceToolCallbacks.onSetEyeColor = [](const char* color) -> bool {
+        String colorUpper = String(color);
+        colorUpper.toUpperCase();
+        for (int i = 0; i < NUM_COLOR_PRESETS; i++) {
+            if (colorUpper == COLOR_PRESET_NAMES[i]) {
+                settingsMenu.setColorIndex(i);
+                renderer.setColor(settingsMenu.getColorRGB565());
+                return true;
+            }
+        }
+        return false;
+    };
 
     // Initialize gaze tweeners
     gazeX.setSmoothTime(0.15f);
@@ -1631,6 +1755,9 @@ void loop() {
         captivePortal.stop();
         Serial.println("Captive portal stopped");
     }
+
+    // Update MCP SSE keepalive
+    mcpServer.update();
 
     // Apply settings changes from web interface
     if (webServer.hasSettingsChange()) {
@@ -1795,8 +1922,10 @@ void loop() {
     bool pomodoroChanged = pomodoroTimer.update(deltaTime);
     PomodoroState pomodoroState = pomodoroTimer.getState();
 
-    // Inform breathing exercise about pomodoro state (don't trigger reminders during active pomodoro)
-    breathingExercise.setPomodoroActive(pomodoroTimer.isActive());
+    // Inform breathing exercise about pomodoro/timer state (don't trigger reminders during active timers)
+    breathingExercise.setPomodoroActive(pomodoroTimer.isActive() || countdownTimer.isActive());
+    reminderManager.setBlocked(pomodoroTimer.isActive() || countdownTimer.isActive() ||
+                               breathingExercise.needsFullScreenRender() || settingsMenu.isOpen());
 
     // Handle pomodoro state changes
     if (pomodoroState != lastPomodoroState) {
@@ -1891,6 +2020,55 @@ void loop() {
         }
     }
 
+    // Update countdown timer
+    bool countdownChanged = countdownTimer.update(deltaTime);
+    CountdownState countdownState = countdownTimer.getState();
+
+    if (countdownState != lastCountdownState) {
+        lastRenderedFilledLen = -1;  // Force progress bar redraw
+
+        if (countdownState == CountdownState::Running) {
+            expressionBeforeCountdown = currentExpression;
+            // No expression override during countdown - just show the timer
+        } else if (countdownState == CountdownState::Celebration) {
+            // Timer finished! Happy expression + sound
+            setExpression(Expression::Happy);
+            showingJoy = true;
+            joyBouncePhase = 0.0f;
+            joyStart = now;
+            countdownExpressActive = true;
+            audioPlayer.play("/happy.mp3");
+            Serial.println("Timer: Celebration!");
+        } else if (countdownState == CountdownState::Idle) {
+            // Timer ended (celebration done) or manually stopped
+            if (countdownExpressActive) {
+                setExpression(expressionBeforeCountdown);
+                countdownExpressActive = false;
+                showingJoy = false;
+            } else if (lastCountdownState == CountdownState::Running) {
+                // Manual stop from running - restore expression
+                setExpression(expressionBeforeCountdown);
+            }
+            // Clear progress bar with animation
+            progressBarClearing = true;
+            clearAnimStart = now;
+            clearAnimProgress = 0.0f;
+            Serial.println("Timer: Stopped, restoring expression");
+        }
+        lastCountdownState = countdownState;
+    }
+
+    // Countdown timer tick sound in last 60 seconds
+    if (countdownTimer.isActive() && countdownTimer.isTickingEnabled() && countdownTimer.isLastMinute()) {
+        uint32_t remaining = countdownTimer.getRemainingSeconds();
+        if (remaining != (lastCountdownTick / 1000)) {
+            lastCountdownTick = remaining * 1000;
+            if (!audioPlayer.isPlaying()) {
+                audioPlayer.play("/tick.mp3");
+            }
+        }
+    }
+
     // Update breathing exercise
     bool breathingChanged = breathingExercise.update(deltaTime,
                                                       settingsMenu.getTimeHour(),
@@ -1904,6 +2082,17 @@ void loop() {
         isBlinking = false;
         blinkProgress = 0;
     }
+    // Update reminder manager
+    bool reminderChanged = reminderManager.update(deltaTime,
+                                                   settingsMenu.getTimeHour(),
+                                                   settingsMenu.getTimeMinute());
+    if (reminderManager.consumeExternalStateChange()) {
+        reminderChanged = true;
+    }
+    if (reminderChanged && reminderManager.isShowing()) {
+        audioPlayer.play("/joy.mp3");
+    }
+
     // Track tick timing for breathing atmosphere
     static uint32_t lastBreathingTickTime = 0;
     // Track breathing completion for delayed happy sound/content animation
@@ -2327,6 +2516,20 @@ void loop() {
         return;
     }
 
+    // If reminder is showing, render it
+    if (reminderManager.isShowing()) {
+        reminderManager.renderPrompt(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                      renderer.getColor());
+        gfx->startWrite();
+        gfx->draw16bitRGBBitmap(leftEyePos.bufX, leftEyePos.bufY,
+                                eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT);
+        gfx->endWrite();
+        prevFrameWasMenu = true;
+        prevLeftRect.valid = false;
+        prevRightRect.valid = false;
+        return;
+    }
+
     // If breathing exercise prompt is showing, render it
     if (breathingExercise.isShowingPrompt()) {
         breathingExercise.renderPromptScreen(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
@@ -2404,6 +2607,34 @@ void loop() {
         gfx->endWrite();
 
         // Mark that we need full blit when exiting this mode
+        prevFrameWasMenu = true;
+        prevLeftRect.valid = false;
+        prevRightRect.valid = false;
+        return;
+    }
+
+    // During active countdown timer, show countdown instead of eyes
+    if (countdownTimer.isActive() && countdownState == CountdownState::Running) {
+        uint32_t remainingSec = countdownTimer.getRemainingSeconds();
+        int minutes = remainingSec / 60;
+        int seconds = remainingSec % 60;
+        bool showColon = ((now / 500) % 2) == 0;
+
+        settingsMenu.renderCountdown(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                      minutes, seconds, renderer.getColor(), showColon,
+                                      countdownTimer.getTimerName());
+
+        const int16_t cornerMargin = 42 - 16;
+        const int16_t safeW = COMBINED_BUF_WIDTH - 2 * cornerMargin;
+        const int16_t safeH = COMBINED_BUF_HEIGHT - 2 * cornerMargin;
+
+        gfx->startWrite();
+        renderPomodoroProgressBar(countdownTimer.getProgress(), false, true);
+        DirtyRect safeRegion = {cornerMargin, cornerMargin, safeW, safeH, true};
+        blitRegion(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                   leftEyePos.bufX, leftEyePos.bufY, safeRegion, false);
+        gfx->endWrite();
+
         prevFrameWasMenu = true;
         prevLeftRect.valid = false;
         prevRightRect.valid = false;
