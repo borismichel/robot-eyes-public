@@ -1348,18 +1348,19 @@ void SettingsMenu::renderWiFiSetup(uint16_t* buffer, int16_t bufWidth, int16_t b
 
     // Display WiFi setup information
     // Title at top
-    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, 40, "WIFI SETUP", color);
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, 20, "WIFI SETUP", color);
 
     // Connection instructions
-    int16_t y = 120;
-    const int lineSpacing = 45;
+    int16_t y = 65;
+    const int lineSpacing = 36;
+    const int sectionGap = 42;
 
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "CONNECT TO", TEXT_COLOR);
     y += lineSpacing;
 
     // SSID (larger, in accent color)
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "DESKBUDDY-SETUP", color);
-    y += lineSpacing + 15;
+    y += sectionGap;
 
     // Password label
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "PASSWORD", TEXT_COLOR);
@@ -1367,7 +1368,7 @@ void SettingsMenu::renderWiFiSetup(uint16_t* buffer, int16_t bufWidth, int16_t b
 
     // Password value
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "DESKBUDDY", color);
-    y += lineSpacing + 15;
+    y += sectionGap;
 
     // IP address info
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "THEN OPEN", TEXT_COLOR);
@@ -1383,18 +1384,19 @@ void SettingsMenu::renderFirstBootSetup(uint16_t* buffer, int16_t bufWidth, int1
     }
 
     // Title at top
-    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, 30, "WIFI SETUP", color);
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, 20, "WIFI SETUP", color);
 
     // Connection instructions - show SSID, password, and IP clearly
-    int16_t y = 90;
-    const int lineSpacing = 45;
+    int16_t y = 65;
+    const int lineSpacing = 36;
+    const int sectionGap = 42;
 
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "CONNECT TO", TEXT_COLOR);
     y += lineSpacing;
 
     // SSID (in accent color)
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "DESKBUDDY-SETUP", color);
-    y += lineSpacing + 10;
+    y += sectionGap;
 
     // Password label
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "PASSWORD", TEXT_COLOR);
@@ -1402,7 +1404,7 @@ void SettingsMenu::renderFirstBootSetup(uint16_t* buffer, int16_t bufWidth, int1
 
     // Password value
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "DESKBUDDY", color);
-    y += lineSpacing + 10;
+    y += sectionGap;
 
     // IP address info
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "THEN OPEN", TEXT_COLOR);
@@ -1411,7 +1413,7 @@ void SettingsMenu::renderFirstBootSetup(uint16_t* buffer, int16_t bufWidth, int1
     drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, y, "192.168.4.1", color);
 
     // Hint at bottom
-    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, SCREEN_H - 30, "WAITING FOR CONNECTION", ARROW_COLOR);
+    drawCenteredText(buffer, bufWidth, bufHeight, SCREEN_W / 2, SCREEN_H - 20, "WAITING FOR CONNECTION", ARROW_COLOR);
 }
 
 void SettingsMenu::renderWiFiChoiceScreen(uint16_t* buffer, int16_t bufWidth, int16_t bufHeight, uint16_t color) {
