@@ -1,0 +1,2623 @@
+#ifndef WEB_UI_HTML_H
+#define WEB_UI_HTML_H
+#include <Arduino.h>
+
+static const char WEB_UI_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeskBuddy</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --background: #0A0A0A;
+            --foreground: #F2F2F2;
+            --card: #121212;
+            --card-foreground: #F2F2F2;
+            --primary: #DFFF00;
+            --primary-foreground: #0A0A0A;
+            --secondary: #1F1F1F;
+            --muted: #262626;
+            --muted-foreground: #999999;
+            --border: #2E2E2E;
+            --destructive: #EF4444;
+            --status-active: #22C55E;
+            --status-concept: #EAB308;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--background);
+            color: var(--foreground);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        /* Navigation */
+        .nav {
+            position: sticky;
+            top: 0;
+            background: var(--background);
+            border-bottom: 1px solid var(--border);
+            z-index: 100;
+            padding: 0 24px;
+        }
+        .nav-inner {
+            max-width: 800px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 60px;
+        }
+        .nav-brand {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            font-size: 1.1em;
+            color: var(--foreground);
+            text-decoration: none;
+        }
+        .nav-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75em;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--status-active);
+            box-shadow: 0 0 8px var(--status-active);
+        }
+        .status-dot.disconnected {
+            background: var(--destructive);
+            box-shadow: 0 0 8px var(--destructive);
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            padding: 16px 24px;
+            background: var(--background);
+            border-bottom: 1px solid var(--border);
+            overflow-x: auto;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .tab {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8em;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 8px 16px;
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--muted-foreground);
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .tab:hover { border-color: var(--muted-foreground); color: var(--foreground); }
+        .tab.active {
+            background: var(--primary);
+            color: var(--primary-foreground);
+            border-color: var(--primary);
+        }
+
+        /* Main content */
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+        .section { display: none; }
+        .section.active { display: block; }
+
+        /* Section headers */
+        .section-header {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75em;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--muted-foreground);
+            margin-bottom: 24px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--primary);
+            display: inline-block;
+        }
+
+        /* Cards */
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+        .card-title {
+            font-size: 1em;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: var(--foreground);
+        }
+
+        /* Dashboard grid */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .stat-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7em;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted-foreground);
+            margin-bottom: 8px;
+        }
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: 600;
+            color: var(--foreground);
+        }
+        .stat-value.accent { color: var(--primary); }
+
+        /* Eye color preview */
+        .eye-preview {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .eye-dot {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: 2px solid var(--border);
+        }
+
+        /* Pomodoro display */
+        .pomodoro-display {
+            text-align: center;
+            padding: 32px;
+        }
+        .pomodoro-time {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 4em;
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 8px;
+        }
+        .pomodoro-state {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--muted-foreground);
+        }
+
+        /* Form elements */
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.9em;
+            color: var(--muted-foreground);
+            margin-bottom: 8px;
+        }
+        .form-value {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--primary);
+        }
+        input[type="range"] {
+            width: 100%;
+            height: 6px;
+            -webkit-appearance: none;
+            background: var(--muted);
+            border-radius: 3px;
+            outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: var(--primary);
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        select {
+            background: var(--secondary);
+            color: var(--foreground);
+            border: 1px solid var(--border);
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9em;
+            cursor: pointer;
+        }
+        select:focus { border-color: var(--primary); outline: none; }
+        .time-row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+        .time-row select { flex: 1; }
+        .time-row span { color: var(--muted-foreground); font-size: 1.5em; }
+
+        /* Toggle */
+        .toggle-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .toggle-row:last-child { border-bottom: none; }
+        .toggle-label { color: var(--foreground); font-size: 0.95em; }
+        .toggle {
+            position: relative;
+            width: 48px;
+            height: 26px;
+        }
+        .toggle input { opacity: 0; width: 0; height: 0; }
+        .toggle .slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background: var(--muted);
+            border-radius: 26px;
+            transition: 0.3s;
+        }
+        .toggle .slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background: var(--muted-foreground);
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+        .toggle input:checked + .slider { background: var(--primary); }
+        .toggle input:checked + .slider:before {
+            transform: translateX(22px);
+            background: var(--primary-foreground);
+        }
+
+        /* Buttons */
+        .btn {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85em;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 12px 24px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: var(--primary-foreground);
+        }
+        .btn-primary:hover { filter: brightness(0.9); }
+        .btn-secondary {
+            background: var(--secondary);
+            color: var(--foreground);
+            border: 1px solid var(--border);
+        }
+        .btn-secondary:hover { border-color: var(--muted-foreground); }
+        .btn-danger {
+            background: var(--destructive);
+            color: white;
+        }
+        .btn-danger:hover { filter: brightness(0.9); }
+        .btn + .btn { margin-top: 12px; }
+
+        /* Input group (input + button side by side) */
+        .input-group {
+            display: flex;
+            gap: 8px;
+            align-items: stretch;
+        }
+        .input-group .btn {
+            width: auto;
+            flex-shrink: 0;
+        }
+        .input-group .wifi-input {
+            flex: 1;
+            margin-bottom: 0;
+        }
+
+        /* OTA upload */
+        .ota-dropzone {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .ota-dropzone:hover, .ota-dropzone.dragover {
+            border-color: var(--primary);
+            background: rgba(223, 255, 0, 0.05);
+        }
+        .ota-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+            color: var(--muted-foreground);
+        }
+        .ota-progress {
+            margin-top: 16px;
+        }
+        .ota-progress-bar {
+            height: 8px;
+            background: var(--secondary);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .ota-progress-fill {
+            height: 100%;
+            background: var(--primary);
+            width: 0%;
+            transition: width 0.3s;
+        }
+        .ota-status {
+            margin-top: 8px;
+            font-size: 14px;
+            color: var(--muted-foreground);
+        }
+        .ota-success { color: #00FF00; }
+        .ota-error { color: var(--destructive); }
+
+        /* WiFi list */
+        .wifi-list {
+            max-height: 240px;
+            overflow-y: auto;
+            margin-bottom: 16px;
+        }
+        .wifi-network {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            background: var(--secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .wifi-network:hover { border-color: var(--primary); }
+        .wifi-ssid { font-weight: 500; }
+        .wifi-signal {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8em;
+            color: var(--muted-foreground);
+        }
+        .wifi-input {
+            width: 100%;
+            padding: 12px 14px;
+            background: var(--secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--foreground);
+            font-size: 0.95em;
+            margin-bottom: 12px;
+        }
+        .wifi-input:focus { border-color: var(--primary); outline: none; }
+        .hidden { display: none !important; }
+
+        /* Status row */
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .status-row:last-child { border-bottom: none; }
+        .status-row-label { color: var(--muted-foreground); }
+        .status-row-value {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--foreground);
+        }
+
+        /* Color grid */
+        .color-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+        .color-swatch {
+            aspect-ratio: 1;
+            border-radius: 8px;
+            border: 2px solid var(--border);
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65em;
+            text-transform: uppercase;
+            color: transparent;
+        }
+        .color-swatch:hover {
+            border-color: var(--foreground);
+            transform: scale(1.05);
+        }
+        .color-swatch:hover { color: var(--background); text-shadow: 0 0 4px var(--foreground); }
+        .color-swatch.active {
+            border-color: var(--primary);
+            border-width: 3px;
+            box-shadow: 0 0 12px var(--primary);
+        }
+
+        /* Expression grid */
+        .expr-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 12px;
+        }
+        .expr-btn {
+            padding: 16px 12px;
+            background: var(--secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--foreground);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75em;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+        }
+        .expr-btn:hover {
+            border-color: var(--primary);
+            background: var(--muted);
+        }
+        .expr-btn:active, .expr-btn.active {
+            background: var(--primary);
+            color: var(--primary-foreground);
+            border-color: var(--primary);
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85em;
+            z-index: 200;
+            animation: slideUp 0.3s ease;
+        }
+        .toast.success { background: var(--status-active); color: var(--background); }
+        .toast.error { background: var(--destructive); color: white; }
+        @keyframes slideUp {
+            from { transform: translateX(-50%) translateY(20px); opacity: 0; }
+            to { transform: translateX(-50%) translateY(0); opacity: 1; }
+        }
+
+        /* Modal */
+        .modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 300;
+        }
+        .modal-content {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            overflow: hidden;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .modal-header span {
+            font-weight: 600;
+        }
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--muted-foreground);
+            font-size: 24px;
+            cursor: pointer;
+        }
+        .modal-close:hover { color: var(--foreground); }
+        .modal-body {
+            padding: 20px;
+        }
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+        }
+
+        /* Accordions */
+        .accordion {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+        .accordion-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            background: var(--card);
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.2s;
+        }
+        .accordion-header:hover {
+            background: var(--secondary);
+        }
+        .accordion-title {
+            font-weight: 500;
+        }
+        .accordion-icon {
+            transition: transform 0.2s;
+            color: var(--muted-foreground);
+        }
+        .accordion.open .accordion-icon {
+            transform: rotate(180deg);
+        }
+        .tool-chevron.open {
+            transform: rotate(90deg);
+        }
+        .accordion-content {
+            display: none;
+            padding: 20px;
+            background: var(--card);
+            border-top: 1px solid var(--border);
+        }
+        .accordion.open .accordion-content {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-inner">
+            <span class="nav-brand">DeskBuddy</span>
+            <div class="nav-status">
+                <span class="status-dot" id="conn-dot"></span>
+                <span id="conn-text">Connected</span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="tabs">
+        <button class="tab active" data-tab="dashboard">Dashboard</button>
+        <button class="tab" data-tab="productivity">Productivity</button>
+        <button class="tab" data-tab="mindfulness">Mindfulness</button>
+        <button class="tab" data-tab="assistant">Assistant</button>
+        <button class="tab" data-tab="settings">Settings</button>
+        <button class="tab" data-tab="expressions">Expressions</button>
+    </div>
+
+    <main class="container">
+        <!-- Dashboard -->
+        <section id="dashboard" class="section active">
+            <span class="section-header">Overview</span>
+
+            <div class="dashboard-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Status</div>
+                    <div class="stat-value" id="dash-status">Online</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">WiFi</div>
+                    <div class="stat-value" id="dash-wifi">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">IP Address</div>
+                    <div class="stat-value" id="dash-ip">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Current Mood</div>
+                    <div class="stat-value accent" id="dash-mood">Neutral</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Current Time</div>
+                    <div class="stat-value" id="dash-time">--:--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Uptime</div>
+                    <div class="stat-value" id="dash-uptime">--</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Eye Color</div>
+                <div class="eye-preview">
+                    <div class="eye-dot" id="eye-color-dot"></div>
+                    <span id="eye-color-name">Cyan</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Quick Settings</div>
+                <div class="form-group">
+                    <div class="form-label">
+                        <span>Volume</span>
+                        <span class="form-value" id="dash-volume-val">50%</span>
+                    </div>
+                    <input type="range" id="dash-volume" min="0" max="100" value="50">
+                </div>
+                <div class="form-group">
+                    <div class="form-label">
+                        <span>Brightness</span>
+                        <span class="form-value" id="dash-brightness-val">100%</span>
+                    </div>
+                    <input type="range" id="dash-brightness" min="0" max="100" value="100">
+                </div>
+            </div>
+        </section>
+
+        <!-- Settings (accordions) -->
+        <section id="settings" class="section">
+            <span class="section-header">Device Settings</span>
+
+            <!-- Display Accordion (open by default) -->
+            <div class="accordion open" data-accordion="display">
+                <div class="accordion-header" onclick="toggleAccordion('display')">
+                    <span class="accordion-title">Display</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="form-group">
+                        <div class="form-label">
+                            <span>Brightness</span>
+                            <span class="form-value" id="brightness-val">100%</span>
+                        </div>
+                        <input type="range" id="brightness" min="0" max="100" value="100">
+                    </div>
+                    <div style="margin-top: 20px;">
+                        <div class="card-title">Eye Color</div>
+                        <div class="color-grid" id="color-grid"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audio Accordion -->
+            <div class="accordion" data-accordion="audio">
+                <div class="accordion-header" onclick="toggleAccordion('audio')">
+                    <span class="accordion-title">Audio</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="form-group">
+                        <div class="form-label">
+                            <span>Volume</span>
+                            <span class="form-value" id="volume-val">50%</span>
+                        </div>
+                        <input type="range" id="volume" min="0" max="100" value="50">
+                    </div>
+                    <div class="form-group">
+                        <div class="form-label">
+                            <span>Microphone Gain</span>
+                            <span class="form-value" id="micGain-val">50%</span>
+                        </div>
+                        <input type="range" id="micGain" min="0" max="100" value="50">
+                    </div>
+                    <div class="form-group">
+                        <div class="form-label">
+                            <span>Mic Threshold</span>
+                            <span class="form-value" id="micThreshold-val">50%</span>
+                        </div>
+                        <input type="range" id="micThreshold" min="0" max="100" value="50">
+                    </div>
+                    <div class="form-group" style="margin-top: 16px;">
+                        <div class="form-label">
+                            <span>Live Mic Level</span>
+                            <span class="form-value" id="micLevel-val">0%</span>
+                        </div>
+                        <div style="background: var(--card-bg); border-radius: 6px; height: 20px; overflow: hidden; border: 1px solid var(--border-color);">
+                            <div id="micLevel-bar" style="height: 100%; width: 0%; background: var(--accent); transition: width 0.15s ease-out;"></div>
+                        </div>
+                    </div>
+                    <button class="btn btn-secondary" onclick="testAudio()" style="margin-top: 16px;">Test Audio</button>
+                </div>
+            </div>
+
+            <!-- Time Accordion -->
+            <div class="accordion" data-accordion="time">
+                <div class="accordion-header" onclick="toggleAccordion('time')">
+                    <span class="accordion-title">Time</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="status-row">
+                        <span class="status-row-label">NTP Sync</span>
+                        <span class="status-row-value" id="ntp-status">--</span>
+                    </div>
+                    <div class="form-group" style="margin-top: 16px;">
+                        <div class="form-label"><span>Timezone (UTC)</span></div>
+                        <select id="timezone-select" class="wifi-input" onchange="setTimezone()">
+                            <option value="-12">UTC-12</option>
+                            <option value="-11">UTC-11</option>
+                            <option value="-10">UTC-10 (Hawaii)</option>
+                            <option value="-9">UTC-9 (Alaska)</option>
+                            <option value="-8">UTC-8 (Pacific)</option>
+                            <option value="-7">UTC-7 (Mountain)</option>
+                            <option value="-6">UTC-6 (Central)</option>
+                            <option value="-5">UTC-5 (Eastern)</option>
+                            <option value="-4">UTC-4 (Atlantic)</option>
+                            <option value="-3">UTC-3</option>
+                            <option value="-2">UTC-2</option>
+                            <option value="-1">UTC-1</option>
+                            <option value="0" selected>UTC+0 (GMT)</option>
+                            <option value="1">UTC+1 (CET)</option>
+                            <option value="2">UTC+2 (EET)</option>
+                            <option value="3">UTC+3 (Moscow)</option>
+                            <option value="4">UTC+4</option>
+                            <option value="5">UTC+5</option>
+                            <option value="5.5">UTC+5:30 (India)</option>
+                            <option value="6">UTC+6</option>
+                            <option value="7">UTC+7</option>
+                            <option value="8">UTC+8 (China)</option>
+                            <option value="9">UTC+9 (Japan)</option>
+                            <option value="10">UTC+10 (Sydney)</option>
+                            <option value="11">UTC+11</option>
+                            <option value="12">UTC+12</option>
+                            <option value="13">UTC+13</option>
+                            <option value="14">UTC+14</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-label"><span>Manual Time (offline mode)</span></div>
+                        <div class="time-row">
+                            <select id="time-hour"></select>
+                            <span>:</span>
+                            <select id="time-minute"></select>
+                        </div>
+                    </div>
+                    <div class="toggle-row" style="margin-top: 16px;">
+                        <span class="toggle-label">24-hour format</span>
+                        <label class="toggle">
+                            <input type="checkbox" id="time-24h">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- WiFi Accordion -->
+            <div class="accordion" data-accordion="wifi">
+                <div class="accordion-header" onclick="toggleAccordion('wifi')">
+                    <span class="accordion-title">WiFi</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="status-row">
+                        <span class="status-row-label">Network</span>
+                        <span class="status-row-value" id="wifi-ssid">--</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-row-label">Signal</span>
+                        <span class="status-row-value" id="wifi-rssi">--</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-row-label">IP Address</span>
+                        <span class="status-row-value" id="wifi-ip">--</span>
+                    </div>
+                    <div id="saved-networks-section" style="margin-top: 20px;">
+                        <div class="card-title">Saved Networks</div>
+                        <div id="saved-networks-list" style="margin-bottom: 8px;"></div>
+                    </div>
+                    <div style="margin-top: 20px;">
+                        <div class="card-title">Available Networks</div>
+                        <div class="wifi-list" id="wifi-list"></div>
+                        <button class="btn btn-secondary" onclick="scanWiFi()">Scan Networks</button>
+                        <div id="wifi-connect-form" class="hidden" style="margin-top: 16px;">
+                            <input type="text" id="wifi-ssid-input" class="wifi-input" placeholder="Network name">
+                            <input type="password" id="wifi-pass-input" class="wifi-input" placeholder="Password">
+                            <button class="btn btn-primary" onclick="connectWiFi()">Connect</button>
+                        </div>
+                        <div id="wifi-connect-status" class="hidden" style="margin-top: 16px; padding: 16px; border-radius: 12px; background: var(--surface);"></div>
+                    </div>
+                    <div style="margin-top: 20px;">
+                        <div class="card-title">Danger Zone</div>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-danger" style="flex: 1 1 0; min-width: 0;" onclick="forgetWiFi()">Forget All Networks</button>
+                            <button class="btn btn-danger" style="flex: 1 1 0; min-width: 0; margin-top: 0;" onclick="disableWiFi()">Disable WiFi</button>
+                        </div>
+                        <p style="margin-top: 12px; font-size: 12px; color: #888;">Disabling WiFi will disconnect this page.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Assistant Settings Accordion -->
+            <div class="accordion" data-accordion="assistant-settings">
+                <div class="accordion-header" onclick="toggleAccordion('assistant-settings')">
+                    <span class="accordion-title">Assistant</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="card-title">LLM Configuration</div>
+                    <div class="form-group">
+                        <div class="form-label"><span>LLM Provider</span></div>
+                        <select id="llm-provider" class="wifi-input" onchange="updateLlmKeyPlaceholder()">
+                            <option value="claude">Claude (Anthropic)</option>
+                            <option value="openai">OpenAI (GPT-4)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-label"><span id="llm-key-label">Claude API Key</span></div>
+                        <div class="input-group">
+                            <input type="password" id="llm-api-key" class="wifi-input" placeholder="sk-ant-...">
+                            <button class="btn btn-secondary" onclick="testLlmApi()">Test</button>
+                        </div>
+                    </div>
+
+                    <div class="card-title" style="margin-top: 24px;">Voice Configuration (OpenAI)</div>
+                    <p style="color: var(--muted-foreground); font-size: 12px; margin-bottom: 12px;">
+                        Uses OpenAI Whisper for speech-to-text and OpenAI TTS for voice output.
+                    </p>
+                    <div class="form-group">
+                        <div class="form-label"><span>OpenAI API Key</span></div>
+                        <div class="input-group">
+                            <input type="password" id="openai-voice-key" class="wifi-input" placeholder="sk-...">
+                            <button class="btn btn-secondary" onclick="testVoiceApi()">Test</button>
+                        </div>
+                        <p style="color: var(--muted-foreground); font-size: 11px; margin-top: 4px;">
+                            Same key as LLM if using OpenAI for both.
+                        </p>
+                    </div>
+
+                    <div class="card-title" style="margin-top: 24px;">Voice Settings</div>
+                    <div class="form-group">
+                        <div class="form-label"><span>Voice</span></div>
+                        <div class="input-group">
+                            <select id="tts-voice" class="wifi-input">
+                                <option value="alloy">Alloy</option>
+                                <option value="echo">Echo</option>
+                                <option value="fable">Fable</option>
+                                <option value="onyx">Onyx</option>
+                                <option value="nova">Nova</option>
+                                <option value="shimmer">Shimmer</option>
+                            </select>
+                            <button class="btn btn-secondary" onclick="previewVoice()">Preview</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-label">
+                            <span>Speech Speed</span>
+                            <span class="form-value" id="tts-speed-val">1.0x</span>
+                        </div>
+                        <input type="range" id="tts-speed" min="0.5" max="2.0" step="0.1" value="1.0">
+                    </div>
+
+                    <div class="card-title" style="margin-top: 24px;">Activation</div>
+                    <div class="toggle-row">
+                        <span class="toggle-label">Wake Word ("Hey Buddy")</span>
+                        <label class="toggle">
+                            <input type="checkbox" id="wake-word-enabled">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <p style="color: var(--muted-foreground); font-size: 11px; margin: 4px 0 12px 0;">
+                        Requires ESP-SR. Currently in stub mode - use push-to-talk.
+                    </p>
+                    <div class="toggle-row">
+                        <span class="toggle-label">Push-to-Talk (hold screen)</span>
+                        <label class="toggle">
+                            <input type="checkbox" id="ptt-enabled" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <p style="color: var(--muted-foreground); font-size: 11px; margin: 4px 0 12px 0;">
+                        When enabled, holding the screen activates voice input. Disables petting gesture.
+                    </p>
+                    <div class="form-group" style="margin-top: 16px;">
+                        <div class="form-label">
+                            <span>Wake Word Sensitivity</span>
+                            <span class="form-value" id="wake-sensitivity-val">50%</span>
+                        </div>
+                        <input type="range" id="wake-sensitivity" min="0" max="100" value="50">
+                    </div>
+
+                    <div class="card-title" style="margin-top: 24px;">System Prompt</div>
+                    <div class="form-group">
+                        <textarea id="system-prompt" class="wifi-input" rows="4" style="resize: vertical; min-height: 100px;" placeholder="You are DeskBuddy, a friendly desk companion. Always reply in the same language the user speaks. Keep responses concise and conversational..."></textarea>
+                    </div>
+                    <button class="btn btn-primary" onclick="saveAssistantSettings()">Save Settings</button>
+                </div>
+            </div>
+
+            <!-- System Accordion -->
+            <div class="accordion" data-accordion="system">
+                <div class="accordion-header" onclick="toggleAccordion('system')">
+                    <span class="accordion-title">System</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="dashboard-grid" style="margin-bottom: 20px;">
+                        <div class="stat-card">
+                            <div class="stat-label">Version</div>
+                            <div class="stat-value" id="sys-version">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Built</div>
+                            <div class="stat-value" id="sys-build">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Partition</div>
+                            <div class="stat-value" id="sys-partition">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Free Heap</div>
+                            <div class="stat-value" id="sys-heap">--</div>
+                        </div>
+                    </div>
+                    <div class="card-title">What's New</div>
+                    <pre id="sys-notes" style="margin: 0 0 20px 0; font-family: inherit; white-space: pre-wrap; color: var(--muted-foreground); font-size: 14px;">Loading...</pre>
+                    <div class="card-title">Update Firmware</div>
+                    <div id="ota-dropzone" class="ota-dropzone" style="margin-bottom: 20px;">
+                        <div class="ota-icon">&#8681;</div>
+                        <div>Drag firmware.bin here</div>
+                        <div style="font-size: 12px; color: var(--muted-foreground);">or click to browse</div>
+                        <input type="file" id="ota-file" accept=".bin" style="display: none;">
+                    </div>
+                    <div id="ota-progress" class="ota-progress hidden">
+                        <div class="ota-progress-bar">
+                            <div class="ota-progress-fill" id="ota-fill"></div>
+                        </div>
+                        <div class="ota-status" id="ota-status">Uploading...</div>
+                    </div>
+                    <div class="card-title" style="margin-top: 20px;">Danger Zone</div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-danger" style="flex: 1 1 0; min-width: 0;" onclick="restartDevice()">Restart</button>
+                        <button class="btn btn-danger" style="flex: 1 1 0; min-width: 0; margin-top: 0;" id="btn-rollback" onclick="rollbackFirmware()">Rollback</button>
+                    </div>
+                    <p style="margin-top: 12px; font-size: 12px; color: #888;">Rollback reverts to the previous firmware version.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Productivity -->
+        <section id="productivity" class="section">
+            <span class="section-header">Productivity</span>
+
+            <!-- Reminders Accordion -->
+            <div class="accordion open" data-accordion="reminders">
+                <div class="accordion-header" onclick="toggleAccordion('reminders')">
+                    <span class="accordion-title">Reminders</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div id="reminder-list"></div>
+                    <div class="card">
+                        <div class="card-title" id="reminder-form-title">Add Reminder</div>
+                        <div class="form-group">
+                            <div class="form-label"><span>Time</span></div>
+                            <input type="time" id="reminder-time" value="12:00" style="background:#1A1A1A;color:#F2F2F2;border:1px solid #333;border-radius:8px;padding:8px 12px;font-family:'JetBrains Mono',monospace;font-size:14px;width:100%;box-sizing:border-box;">
+                        </div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Message</span>
+                                <span class="form-value" id="reminder-char-count">0/48</span>
+                            </div>
+                            <input type="text" id="reminder-message" maxlength="48" placeholder="Take out trash" style="background:#1A1A1A;color:#F2F2F2;border:1px solid #333;border-radius:8px;padding:8px 12px;font-family:'JetBrains Mono',monospace;font-size:14px;width:100%;box-sizing:border-box;">
+                        </div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">Repeat Daily</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="reminder-recurring">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div style="display:flex;gap:8px;margin-top:12px;align-items:center;">
+                            <button class="btn btn-primary" id="reminder-submit-btn" onclick="addReminder()" style="flex:1;">Add Reminder</button>
+                            <button class="btn" id="reminder-cancel-btn" onclick="cancelEditReminder()" style="display:none;background:#333;color:#aaa;border:none;border-radius:8px;padding:8px 16px;cursor:pointer;">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Countdown Timer Accordion -->
+            <div class="accordion open" data-accordion="countdown">
+                <div class="accordion-header" onclick="toggleAccordion('countdown')">
+                    <span class="accordion-title">Countdown Timer</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="card">
+                        <div class="pomodoro-display">
+                            <div class="pomodoro-time" id="timer-time">--:--</div>
+                            <div class="pomodoro-state" id="timer-state">Ready</div>
+                        </div>
+                        <button class="btn btn-primary" id="btn-timer-start" onclick="startCountdown()">Start</button>
+                        <button class="btn btn-danger hidden" id="btn-timer-stop" onclick="stopCountdown()">Stop</button>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-title">Duration</div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Minutes</span>
+                                <span class="form-value" id="timerMinutes-val">5 min</span>
+                            </div>
+                            <input type="range" id="timerMinutes" min="1" max="60" value="5">
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-title">Options</div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">Ticking Sound (last 60s)</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="timerTickingEnabled" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pomodoro Accordion -->
+            <div class="accordion open" data-accordion="pomodoro">
+                <div class="accordion-header" onclick="toggleAccordion('pomodoro')">
+                    <span class="accordion-title">Pomodoro Timer</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="card">
+                        <div class="pomodoro-display">
+                            <div class="pomodoro-time" id="pomo-time">--:--</div>
+                            <div class="pomodoro-state" id="pomo-state">Ready</div>
+                        </div>
+                        <button class="btn btn-primary" id="btn-start" onclick="startPomodoro()">Start</button>
+                        <button class="btn btn-danger hidden" id="btn-stop" onclick="stopPomodoro()">Stop</button>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-title">Durations</div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Work Duration</span>
+                                <span class="form-value" id="workMinutes-val">25 min</span>
+                            </div>
+                            <input type="range" id="workMinutes" min="1" max="60" value="25">
+                        </div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Short Break</span>
+                                <span class="form-value" id="shortBreakMinutes-val">5 min</span>
+                            </div>
+                            <input type="range" id="shortBreakMinutes" min="1" max="30" value="5">
+                        </div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Long Break</span>
+                                <span class="form-value" id="longBreakMinutes-val">15 min</span>
+                            </div>
+                            <input type="range" id="longBreakMinutes" min="5" max="60" value="15">
+                        </div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Sessions Before Long Break</span>
+                                <span class="form-value" id="sessionsBeforeLongBreak-val">4</span>
+                            </div>
+                            <input type="range" id="sessionsBeforeLongBreak" min="1" max="8" value="4">
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-title">Options</div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">Ticking Sound (last 60s)</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="tickingEnabled" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Expressions -->
+        <section id="expressions" class="section">
+            <span class="section-header">Expression Preview</span>
+            <div class="card">
+                <div class="status-row">
+                    <span class="status-row-label">Current Mood</span>
+                    <span class="status-row-value accent" id="expr-current-mood">Neutral</span>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-title">Click to preview on device</div>
+                <div class="expr-grid" id="expr-grid"></div>
+            </div>
+        </section>
+
+        <!-- Mindfulness -->
+        <section id="mindfulness" class="section">
+            <span class="section-header">Mindfulness</span>
+
+            <!-- Breathing Exercise Accordion -->
+            <div class="accordion open" data-accordion="box-breathing">
+                <div class="accordion-header" onclick="toggleAccordion('box-breathing')">
+                    <span class="accordion-title">Breathing Exercise</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="card">
+                        <div class="toggle-row" style="margin-bottom: 12px;">
+                            <span class="toggle-label">Exercise Type</span>
+                            <select id="breathing-type" style="background: var(--card); color: var(--foreground); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px;">
+                                <option value="0">Box Breathing</option>
+                                <option value="1">Nadi Shodhana</option>
+                            </select>
+                        </div>
+                        <p id="breathing-desc" style="color: var(--muted-foreground); margin-bottom: 16px;">
+                            Inhale 5s, hold 5s, exhale 5s, hold 5s &times; 3 cycles (60 seconds total)
+                        </p>
+                        <button class="btn btn-primary" onclick="startBreathing()">Breathe Now</button>
+                    </div>
+
+                    <div class="card">
+                        <div class="toggle-row">
+                            <span class="toggle-label">Enable Scheduled Reminders</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="breathing-enabled">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="toggle-row" style="margin-top: 12px;">
+                            <span class="toggle-label">Sound</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="breathing-sound-enabled" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="card" id="breathing-schedule-card">
+                        <div class="card-title">Schedule</div>
+
+                        <div class="form-group">
+                            <div class="form-label"><span>Active Hours</span></div>
+                            <div style="display: flex; align-items: center; gap: 12px; margin-top: 8px;">
+                                <select id="breathing-start-hour" class="select-input"></select>
+                                <span>to</span>
+                                <select id="breathing-end-hour" class="select-input"></select>
+                            </div>
+                            <p style="color: var(--muted-foreground); font-size: 12px; margin-top: 8px;">Reminders only appear during this window</p>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 16px;">
+                            <div class="form-label">
+                                <span>Remind Every</span>
+                                <span class="form-value" id="breathing-interval-val">60 min</span>
+                            </div>
+                            <input type="range" id="breathing-interval" min="30" max="180" step="15" value="60">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Assistant -->
+        <section id="assistant" class="section">
+            <span class="section-header">Voice Assistant</span>
+
+            <!-- Assistant Status Card -->
+            <div class="card">
+                <div class="card-title">Status</div>
+                <div class="dashboard-grid" style="margin-top: 12px;">
+                    <div class="stat-card">
+                        <div class="stat-label">State</div>
+                        <div class="stat-value" id="assistant-state">Idle</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Context Tokens</div>
+                        <div class="stat-value" id="assistant-tokens">0 / 8000</div>
+                    </div>
+                </div>
+                <button class="btn btn-secondary" onclick="clearAssistantHistory()" style="margin-top: 16px;">Clear History</button>
+            </div>
+
+            <!-- MCP Server Status Accordion -->
+            <div class="accordion open" data-accordion="mcp-server">
+                <div class="accordion-header" onclick="toggleAccordion('mcp-server')">
+                    <span class="accordion-title">DeskBuddy MCP Server</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="status-row">
+                        <span class="status-row-label">Endpoint</span>
+                        <span class="status-row-value" id="mcp-endpoint">--</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-row-label">Status</span>
+                        <span class="status-row-value" id="mcp-server-status">Running</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-row-label">Exposed Tools</span>
+                        <span class="status-row-value">14</span>
+                    </div>
+                    <div style="margin-top: 12px;">
+                        <div class="form-label" style="cursor: pointer; user-select: none;" onclick="document.getElementById('tool-list').style.display = document.getElementById('tool-list').style.display === 'none' ? 'block' : 'none'; this.querySelector('.tool-chevron').classList.toggle('open');">
+                            <span>Available Tools <span class="tool-chevron" style="display: inline-block; transition: transform 0.2s; font-size: 10px;">&#9654;</span></span>
+                        </div>
+                        <div id="tool-list" style="display: none; margin-top: 8px; font-size: 12px; line-height: 1.6;">
+                            <div style="display: grid; gap: 6px;">
+                                <div><code style="color: var(--accent);">set_expression</code> <span style="color: var(--muted-foreground);">— Change facial expression (18 presets)</span></div>
+                                <div><code style="color: var(--accent);">set_timer</code> <span style="color: var(--muted-foreground);">— Start a countdown timer</span></div>
+                                <div><code style="color: var(--accent);">cancel_timer</code> <span style="color: var(--muted-foreground);">— Stop the current timer</span></div>
+                                <div><code style="color: var(--accent);">start_pomodoro</code> <span style="color: var(--muted-foreground);">— Start a Pomodoro work session</span></div>
+                                <div><code style="color: var(--accent);">stop_pomodoro</code> <span style="color: var(--muted-foreground);">— Stop the current Pomodoro</span></div>
+                                <div><code style="color: var(--accent);">get_device_info</code> <span style="color: var(--muted-foreground);">— Device status, settings, timers</span></div>
+                                <div><code style="color: var(--accent);">play_sound</code> <span style="color: var(--muted-foreground);">— Play a sound effect</span></div>
+                                <div><code style="color: var(--accent);">set_reminder</code> <span style="color: var(--muted-foreground);">— Create a timed reminder</span></div>
+                                <div><code style="color: var(--accent);">cancel_reminder</code> <span style="color: var(--muted-foreground);">— Remove a reminder by text</span></div>
+                                <div><code style="color: var(--accent);">list_reminders</code> <span style="color: var(--muted-foreground);">— List all active reminders</span></div>
+                                <div><code style="color: var(--accent);">start_breathing</code> <span style="color: var(--muted-foreground);">— Start box breathing exercise</span></div>
+                                <div><code style="color: var(--accent);">set_volume</code> <span style="color: var(--muted-foreground);">— Set speaker volume (0-100)</span></div>
+                                <div><code style="color: var(--accent);">set_brightness</code> <span style="color: var(--muted-foreground);">— Set screen brightness (0-100)</span></div>
+                                <div><code style="color: var(--accent);">set_eye_color</code> <span style="color: var(--muted-foreground);">— Change eye color preset</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 16px;">
+                        <div class="form-label"><span>Claude Desktop Config</span></div>
+                        <div style="position: relative;">
+                            <pre id="mcp-claude-config" style="background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px; overflow-x: auto; white-space: pre; margin: 0; color: var(--foreground); font-family: monospace;"></pre>
+                            <button onclick="copyMcpConfig()" style="position: absolute; top: 8px; right: 8px; background: var(--border); border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; color: var(--foreground); font-size: 12px;" id="mcp-copy-btn">Copy</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MCP Client Connections Accordion -->
+            <div class="accordion" data-accordion="mcp-clients">
+                <div class="accordion-header" onclick="toggleAccordion('mcp-clients')">
+                    <span class="accordion-title">Connected MCP Servers</span>
+                    <span class="accordion-icon">&#9660;</span>
+                </div>
+                <div class="accordion-content">
+                    <p style="color: var(--muted-foreground); margin-bottom: 16px;">
+                        Connect to external MCP servers to give DeskBuddy access to more tools.
+                    </p>
+                    <div id="mcp-servers-list">
+                        <p style="color: var(--muted-foreground); font-style: italic;">No MCP servers configured</p>
+                    </div>
+                    <div style="margin-top: 16px;">
+                        <button class="btn btn-primary" onclick="showAddMcpServer()">Add Server</button>
+                        <button class="btn btn-secondary" onclick="discoverMcpTools()" style="margin-left: 8px;">Refresh Tools</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- MCP Server Add/Edit Modal -->
+    <div id="mcp-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span id="mcp-modal-title">Add MCP Server</span>
+                <button class="modal-close" onclick="closeMcpModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <div class="form-label"><span>Server Name</span></div>
+                    <input type="text" id="mcp-name" class="wifi-input" placeholder="Home Assistant">
+                </div>
+                <div class="form-group">
+                    <div class="form-label"><span>Server URL</span></div>
+                    <input type="text" id="mcp-url" class="wifi-input" placeholder="http://192.168.1.100:8080">
+                </div>
+                <div class="form-group">
+                    <div class="form-label"><span>API Key (optional)</span></div>
+                    <input type="password" id="mcp-apikey" class="wifi-input" placeholder="Optional authentication key">
+                </div>
+                <input type="hidden" id="mcp-edit-index" value="-1">
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeMcpModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveMcpServer()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Color presets matching device
+        // Colors matching device COLOR_PRESETS order
+        const EYE_COLORS = [
+            { name: 'Cyan', hex: '#00FFFF' },
+            { name: 'Pink', hex: '#FF00FF' },
+            { name: 'Green', hex: '#00FF00' },
+            { name: 'Orange', hex: '#FFA500' },
+            { name: 'Purple', hex: '#8000FF' },
+            { name: 'White', hex: '#FFFFFF' },
+            { name: 'Red', hex: '#FF0000' },
+            { name: 'Blue', hex: '#0000FF' }
+        ];
+
+        let lastSettingsVersion = -1;
+        let failCount = 0;
+        let deviceIP = location.hostname;
+        let lastStatusData = null;
+
+        // Tab navigation
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+                // Load system info when Settings tab is opened
+                if (tab.dataset.tab === 'settings') loadSystemInfo();
+            });
+        });
+
+        // Accordion toggle
+        function toggleAccordion(name) {
+            const acc = document.querySelector('[data-accordion="' + name + '"]');
+            if (acc) acc.classList.toggle('open');
+        }
+
+        function showToast(msg, type = 'success') {
+            document.querySelectorAll('.toast').forEach(t => t.remove());
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.textContent = msg;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        async function testAudio() {
+            try {
+                await fetch('/api/audio/test', { method: 'POST' });
+                showToast('Playing test sound');
+            } catch (e) {
+                showToast('Audio test failed', 'error');
+            }
+        }
+
+        function setConnected(connected) {
+            const dot = document.getElementById('conn-dot');
+            const text = document.getElementById('conn-text');
+            if (connected) {
+                dot.classList.remove('disconnected');
+                text.textContent = 'Connected';
+            } else {
+                dot.classList.add('disconnected');
+                text.textContent = 'Offline';
+            }
+        }
+
+        async function loadData() {
+            try {
+                const status = await fetch('/api/status').then(r => r.json());
+                lastStatusData = status;
+                if (failCount > 0) { setConnected(true); failCount = 0; }
+
+                // WiFi status
+                if (status.wifi) {
+                    const ssid = status.wifi.connected ? status.wifi.ssid : status.wifi.state;
+                    document.getElementById('dash-wifi').textContent = ssid;
+                    document.getElementById('dash-ip').textContent = status.wifi.ip || '--';
+                    document.getElementById('wifi-ssid').textContent = status.wifi.connected ? status.wifi.ssid : 'Not connected';
+                    document.getElementById('wifi-rssi').textContent = status.wifi.rssi ? status.wifi.rssi + ' dBm' : '--';
+                    document.getElementById('wifi-ip').textContent = status.wifi.ip || '--';
+                    if (status.wifi.ip) deviceIP = status.wifi.ip;
+                    updateMcpConfig();
+                    updateWiFiConnectStatus(status.wifi);
+                }
+
+                // Pomodoro
+                if (status.pomodoro) {
+                    updatePomodoroUI(status.pomodoro);
+                }
+
+                // Countdown timer
+                if (status.timer) {
+                    updateTimerUI(status.timer);
+                }
+
+                // Reminders
+                updateRemindersUI(status.reminders);
+
+                // Current time
+                if (status.time) {
+                    const h = status.time.hour;
+                    const m = status.time.minute;
+                    let timeStr;
+                    if (status.time.is24Hour) {
+                        timeStr = h.toString().padStart(2, '0') + ':' + m.toString().padStart(2, '0');
+                    } else {
+                        const h12 = h % 12 || 12;
+                        const ampm = h < 12 ? 'AM' : 'PM';
+                        timeStr = h12 + ':' + m.toString().padStart(2, '0') + ' ' + ampm;
+                    }
+                    document.getElementById('dash-time').textContent = timeStr;
+
+                    // NTP status
+                    const ntpEl = document.getElementById('ntp-status');
+                    if (ntpEl) {
+                        ntpEl.textContent = status.time.ntpSynced ? 'Synced' : 'Not synced';
+                        ntpEl.style.color = status.time.ntpSynced ? '#DFFF00' : '#888';
+                    }
+                }
+
+                // Uptime
+                if (status.uptimeSeconds !== undefined) {
+                    const secs = status.uptimeSeconds;
+                    const days = Math.floor(secs / 86400);
+                    const hrs = Math.floor((secs % 86400) / 3600);
+                    const mins = Math.floor((secs % 3600) / 60);
+                    let uptimeStr;
+                    if (days > 0) {
+                        uptimeStr = days + 'd ' + hrs + 'h';
+                    } else if (hrs > 0) {
+                        uptimeStr = hrs + 'h ' + mins + 'm';
+                    } else {
+                        uptimeStr = mins + 'm';
+                    }
+                    document.getElementById('dash-uptime').textContent = uptimeStr;
+                }
+
+                // Current mood - update dashboard and expressions page
+                if (status.currentMood) {
+                    document.getElementById('dash-mood').textContent = status.currentMood;
+                    document.getElementById('expr-current-mood').textContent = status.currentMood;
+                }
+
+                // Mic level
+                if (status.micLevel !== undefined) {
+                    const pct = Math.round(status.micLevel * 100);
+                    document.getElementById('micLevel-val').textContent = pct + '%';
+                    const bar = document.getElementById('micLevel-bar');
+                    bar.style.width = pct + '%';
+                    bar.style.background = pct > 80 ? '#ff4444' : pct > 45 ? '#ff8800' : 'var(--accent)';
+                }
+
+                // Check settings version
+                const ver = status.settingsVersion || 0;
+                if (ver !== lastSettingsVersion) {
+                    lastSettingsVersion = ver;
+                    await loadSettings();
+                }
+            } catch (e) {
+                failCount++;
+                if (failCount >= 3) setConnected(false);
+            }
+        }
+
+        async function loadSettings() {
+            try {
+                const [settings, time] = await Promise.all([
+                    fetch('/api/settings').then(r => r.json()),
+                    fetch('/api/time').then(r => r.json())
+                ]);
+
+                if (settings.device) {
+                    // Update all sliders (including dashboard duplicates)
+                    setSlider('volume', settings.device.volume);
+                    setSlider('brightness', settings.device.brightness);
+                    setSlider('micGain', settings.device.micGain);
+                    setSlider('micThreshold', settings.device.micThreshold);
+                    setSlider('dash-volume', settings.device.volume);
+                    setSlider('dash-brightness', settings.device.brightness);
+
+                    // Eye color - update dashboard and color grid
+                    const colorIdx = settings.device.eyeColorIndex || 0;
+                    const color = EYE_COLORS[colorIdx] || EYE_COLORS[0];
+                    document.getElementById('eye-color-dot').style.background = color.hex;
+                    document.getElementById('eye-color-name').textContent = color.name;
+                    selectColor(colorIdx);
+                }
+
+                if (settings.pomodoro) {
+                    // Pomodoro sliders
+                    setPomoSlider('workMinutes', settings.pomodoro.workMinutes, ' min');
+                    setPomoSlider('shortBreakMinutes', settings.pomodoro.shortBreakMinutes, ' min');
+                    setPomoSlider('longBreakMinutes', settings.pomodoro.longBreakMinutes, ' min');
+                    setPomoSlider('sessionsBeforeLongBreak', settings.pomodoro.sessionsBeforeLongBreak, '');
+                    document.getElementById('tickingEnabled').checked = settings.pomodoro.tickingEnabled;
+                }
+
+                if (settings.timer) {
+                    document.getElementById('timerTickingEnabled').checked = settings.timer.tickingEnabled;
+                }
+
+                if (time) {
+                    document.getElementById('time-hour').value = time.hour;
+                    document.getElementById('time-minute').value = time.minute;
+                    document.getElementById('time-24h').checked = time.is24Hour;
+                    if (time.gmtOffsetHours !== undefined) {
+                        document.getElementById('timezone-select').value = time.gmtOffsetHours;
+                    }
+                }
+
+                // Also load timezone from device settings
+                if (settings.device && settings.device.gmtOffsetHours !== undefined) {
+                    document.getElementById('timezone-select').value = settings.device.gmtOffsetHours;
+                }
+
+                // Breathing/Wellness settings
+                if (settings.breathing) {
+                    document.getElementById('breathing-enabled').checked = settings.breathing.enabled;
+                    document.getElementById('breathing-sound-enabled').checked = settings.breathing.soundEnabled !== false;
+                    document.getElementById('breathing-start-hour').value = settings.breathing.startHour;
+                    document.getElementById('breathing-end-hour').value = settings.breathing.endHour;
+                    document.getElementById('breathing-interval').value = settings.breathing.intervalMinutes;
+                    document.getElementById('breathing-interval-val').textContent = settings.breathing.intervalMinutes + ' min';
+                    document.getElementById('breathing-schedule-card').style.opacity = settings.breathing.enabled ? '1' : '0.5';
+                    if (settings.breathing.exerciseType !== undefined) {
+                        document.getElementById('breathing-type').value = settings.breathing.exerciseType;
+                        updateBreathingDesc(settings.breathing.exerciseType);
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to load settings:', e);
+            }
+        }
+
+        function setSlider(id, value) {
+            const el = document.getElementById(id);
+            const val = document.getElementById(id + '-val');
+            if (el) el.value = value;
+            if (val) val.textContent = value + '%';
+        }
+
+        function setPomoSlider(id, value, suffix) {
+            const el = document.getElementById(id);
+            const val = document.getElementById(id + '-val');
+            if (el) el.value = value;
+            if (val) val.textContent = value + suffix;
+        }
+
+        function selectColor(idx) {
+            document.querySelectorAll('.color-swatch').forEach((s, i) => {
+                s.classList.toggle('active', i === idx);
+            });
+        }
+
+        function updatePomodoroUI(pomo) {
+            const timeEl = document.getElementById('pomo-time');
+            const stateEl = document.getElementById('pomo-state');
+            const startBtn = document.getElementById('btn-start');
+            const stopBtn = document.getElementById('btn-stop');
+
+            if (pomo.active) {
+                const m = Math.floor(pomo.remainingSeconds / 60);
+                const s = pomo.remainingSeconds % 60;
+                timeEl.textContent = m + ':' + s.toString().padStart(2, '0');
+                stateEl.textContent = pomo.state;
+                startBtn.classList.add('hidden');
+                stopBtn.classList.remove('hidden');
+            } else {
+                timeEl.textContent = '--:--';
+                stateEl.textContent = 'Ready';
+                startBtn.classList.remove('hidden');
+                stopBtn.classList.add('hidden');
+            }
+        }
+
+        // Setting updates
+        let updateTimeout;
+        function updateSetting(key, value) {
+            clearTimeout(updateTimeout);
+            updateTimeout = setTimeout(() => {
+                fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ [key]: parseInt(value) })
+                });
+            }, 300);
+        }
+
+        // Slider listeners
+        ['volume', 'brightness', 'micGain', 'micThreshold'].forEach(key => {
+            const el = document.getElementById(key);
+            if (el) el.addEventListener('input', (e) => {
+                document.getElementById(key + '-val').textContent = e.target.value + '%';
+                updateSetting(key, e.target.value);
+            });
+        });
+
+        // Dashboard quick sliders
+        document.getElementById('dash-volume').addEventListener('input', (e) => {
+            document.getElementById('dash-volume-val').textContent = e.target.value + '%';
+            document.getElementById('volume').value = e.target.value;
+            document.getElementById('volume-val').textContent = e.target.value + '%';
+            updateSetting('volume', e.target.value);
+        });
+        document.getElementById('dash-brightness').addEventListener('input', (e) => {
+            document.getElementById('dash-brightness-val').textContent = e.target.value + '%';
+            document.getElementById('brightness').value = e.target.value;
+            document.getElementById('brightness-val').textContent = e.target.value + '%';
+            updateSetting('brightness', e.target.value);
+        });
+
+        // Timezone setting
+        function setTimezone() {
+            const tz = document.getElementById('timezone-select').value;
+            updateSetting('gmtOffsetHours', tz);
+            showToast('Timezone updated - NTP will re-sync');
+        }
+
+        // Pomodoro
+        async function startPomodoro() {
+            try {
+                await fetch('/api/pomodoro/start', { method: 'POST' });
+                showToast('Pomodoro started');
+                loadData();
+            } catch (e) { showToast('Failed to start', 'error'); }
+        }
+
+        async function stopPomodoro() {
+            try {
+                await fetch('/api/pomodoro/stop', { method: 'POST' });
+                showToast('Pomodoro stopped');
+                loadData();
+            } catch (e) { showToast('Failed to stop', 'error'); }
+        }
+
+        // Reminders
+        let editingReminderIndex = -1;
+
+        function updateRemindersUI(reminders) {
+            const list = document.getElementById('reminder-list');
+            if (!list) return;
+            if (!reminders || reminders.length === 0) {
+                list.innerHTML = '<div class="card" style="text-align:center;opacity:0.5;">No reminders set</div>';
+                return;
+            }
+            let html = '';
+            reminders.forEach((r, i) => {
+                const time = r.hour.toString().padStart(2,'0') + ':' + r.minute.toString().padStart(2,'0');
+                const badge = r.recurring ? ' <span style="color:#DFFF00;font-size:11px;">DAILY</span>' : '';
+                html += '<div class="card" style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;">';
+                html += '<div style="flex:1;min-width:0;"><span style="font-family:JetBrains Mono,monospace;color:#DFFF00;margin-right:10px;">' + time + '</span>';
+                html += '<span>' + r.message + '</span>' + badge + '</div>';
+                html += '<div style="display:flex;gap:6px;flex-shrink:0;">';
+                html += '<button style="background:#444;color:#fff;border:none;border-radius:6px;width:28px;height:28px;min-width:28px;font-size:13px;cursor:pointer;" onclick="editReminder(' + i + ')">&#9998;</button>';
+                html += '<button style="background:#FF4444;color:#fff;border:none;border-radius:6px;width:28px;height:28px;min-width:28px;font-size:13px;cursor:pointer;" onclick="deleteReminder(' + i + ')">&times;</button>';
+                html += '</div></div>';
+            });
+            list.innerHTML = html;
+        }
+
+        function editReminder(index) {
+            const reminders = lastStatusData && lastStatusData.reminders;
+            if (!reminders || index < 0 || index >= reminders.length) return;
+            const r = reminders[index];
+            editingReminderIndex = index;
+            document.getElementById('reminder-time').value = r.hour.toString().padStart(2,'0') + ':' + r.minute.toString().padStart(2,'0');
+            document.getElementById('reminder-message').value = r.message;
+            document.getElementById('reminder-char-count').textContent = r.message.length + '/48';
+            document.getElementById('reminder-recurring').checked = r.recurring;
+            document.getElementById('reminder-form-title').textContent = 'Edit Reminder';
+            document.getElementById('reminder-submit-btn').textContent = 'Save';
+            document.getElementById('reminder-cancel-btn').style.display = '';
+            document.getElementById('reminder-form-title').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function cancelEditReminder() {
+            editingReminderIndex = -1;
+            document.getElementById('reminder-time').value = '12:00';
+            document.getElementById('reminder-message').value = '';
+            document.getElementById('reminder-char-count').textContent = '0/48';
+            document.getElementById('reminder-recurring').checked = false;
+            document.getElementById('reminder-form-title').textContent = 'Add Reminder';
+            document.getElementById('reminder-submit-btn').textContent = 'Add Reminder';
+            document.getElementById('reminder-cancel-btn').style.display = 'none';
+        }
+
+        async function addReminder() {
+            const timeVal = document.getElementById('reminder-time').value;
+            const parts = timeVal.split(':');
+            const hour = parseInt(parts[0]) || 0;
+            const minute = parseInt(parts[1]) || 0;
+            const message = document.getElementById('reminder-message').value.trim();
+            const recurring = document.getElementById('reminder-recurring').checked;
+
+            if (!message) { showToast('Enter a message', 'error'); return; }
+
+            try {
+                let url = '/api/reminders';
+                let body = { hour, minute, message, recurring };
+                if (editingReminderIndex >= 0) {
+                    url = '/api/reminders/edit';
+                    body.index = editingReminderIndex;
+                }
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    const verb = editingReminderIndex >= 0 ? 'updated' : 'added';
+                    showToast('Reminder ' + verb + ' for ' + hour.toString().padStart(2,'0') + ':' + minute.toString().padStart(2,'0'));
+                    cancelEditReminder();
+                    loadData();
+                } else {
+                    showToast(data.error || 'Failed', 'error');
+                }
+            } catch (e) { showToast('Failed to save reminder', 'error'); }
+        }
+
+        async function deleteReminder(index) {
+            if (editingReminderIndex === index) cancelEditReminder();
+            try {
+                await fetch('/api/reminders/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index })
+                });
+                showToast('Reminder deleted');
+                loadData();
+            } catch (e) { showToast('Failed to delete', 'error'); }
+        }
+
+        const reminderMsgEl = document.getElementById('reminder-message');
+        if (reminderMsgEl) reminderMsgEl.addEventListener('input', (e) => {
+            document.getElementById('reminder-char-count').textContent = e.target.value.length + '/48';
+        });
+
+        // Countdown Timer
+        function updateTimerUI(timer) {
+            const timeEl = document.getElementById('timer-time');
+            const stateEl = document.getElementById('timer-state');
+            const startBtn = document.getElementById('btn-timer-start');
+            const stopBtn = document.getElementById('btn-timer-stop');
+
+            if (timer && timer.active) {
+                const m = Math.floor(timer.remainingSeconds / 60);
+                const s = timer.remainingSeconds % 60;
+                timeEl.textContent = m + ':' + s.toString().padStart(2, '0');
+                stateEl.textContent = timer.name || 'Running';
+                startBtn.classList.add('hidden');
+                stopBtn.classList.remove('hidden');
+            } else {
+                timeEl.textContent = '--:--';
+                stateEl.textContent = 'Ready';
+                startBtn.classList.remove('hidden');
+                stopBtn.classList.add('hidden');
+            }
+        }
+
+        async function startCountdown() {
+            const minutes = parseInt(document.getElementById('timerMinutes').value) || 5;
+            try {
+                await fetch('/api/timer/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ minutes: minutes })
+                });
+                showToast('Timer started: ' + minutes + ' min');
+                loadData();
+            } catch (e) { showToast('Failed to start timer', 'error'); }
+        }
+
+        async function stopCountdown() {
+            try {
+                await fetch('/api/timer/stop', { method: 'POST' });
+                showToast('Timer stopped');
+                loadData();
+            } catch (e) { showToast('Failed to stop timer', 'error'); }
+        }
+
+        // Timer slider
+        const timerMinEl = document.getElementById('timerMinutes');
+        if (timerMinEl) timerMinEl.addEventListener('input', (e) => {
+            document.getElementById('timerMinutes-val').textContent = e.target.value + ' min';
+        });
+
+        // Timer ticking toggle
+        const timerTickEl = document.getElementById('timerTickingEnabled');
+        if (timerTickEl) timerTickEl.addEventListener('change', (e) => {
+            fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timerTickingEnabled: e.target.checked })
+            });
+        });
+
+        // Time dropdowns
+        const hourSel = document.getElementById('time-hour');
+        const minSel = document.getElementById('time-minute');
+        for (let i = 0; i < 24; i++) {
+            const opt = document.createElement('option');
+            opt.value = i;
+            opt.textContent = i.toString().padStart(2, '0');
+            hourSel.appendChild(opt);
+        }
+        for (let i = 0; i < 60; i++) {
+            const opt = document.createElement('option');
+            opt.value = i;
+            opt.textContent = i.toString().padStart(2, '0');
+            minSel.appendChild(opt);
+        }
+
+        function updateTime() {
+            fetch('/api/time', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    hour: parseInt(hourSel.value),
+                    minute: parseInt(minSel.value),
+                    is24Hour: document.getElementById('time-24h').checked
+                })
+            });
+        }
+        hourSel.addEventListener('change', updateTime);
+        minSel.addEventListener('change', updateTime);
+        document.getElementById('time-24h').addEventListener('change', updateTime);
+
+        // WiFi
+        async function scanWiFi() {
+            const list = document.getElementById('wifi-list');
+            list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted-foreground)">Scanning...</div>';
+            try {
+                const networks = await fetch('/api/wifi/scan').then(r => r.json());
+                list.innerHTML = '';
+                if (networks.length === 0) {
+                    list.innerHTML = '<div style="text-align:center;padding:16px;color:var(--muted-foreground)">No networks found</div>';
+                    return;
+                }
+                networks.forEach(net => {
+                    const div = document.createElement('div');
+                    div.className = 'wifi-network';
+                    div.innerHTML = '<span class="wifi-ssid">' + net.ssid + '</span><span class="wifi-signal">' + net.rssi + ' dBm</span>';
+                    div.onclick = () => selectNetwork(net.ssid);
+                    list.appendChild(div);
+                });
+            } catch (e) {
+                list.innerHTML = '<div style="text-align:center;padding:16px;color:var(--destructive)">Scan failed</div>';
+            }
+        }
+
+        function selectNetwork(ssid) {
+            document.getElementById('wifi-ssid-input').value = ssid;
+            document.getElementById('wifi-pass-input').value = '';
+            document.getElementById('wifi-connect-form').classList.remove('hidden');
+        }
+
+        let wifiConnectPending = false;
+        let wifiConnectSSID = '';
+
+        async function connectWiFi() {
+            const ssid = document.getElementById('wifi-ssid-input').value;
+            const pass = document.getElementById('wifi-pass-input').value;
+            if (!ssid) return showToast('Enter network name', 'error');
+            try {
+                await fetch('/api/wifi/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ssid, password: pass })
+                });
+                wifiConnectPending = true;
+                wifiConnectSSID = ssid;
+                document.getElementById('wifi-connect-form').classList.add('hidden');
+                const status = document.getElementById('wifi-connect-status');
+                status.classList.remove('hidden');
+                status.innerHTML = '<div style="text-align:center"><div style="margin-bottom:8px;font-size:14px;color:var(--primary)">Connecting to ' + ssid + '...</div><div style="font-size:12px;color:#888">This may take up to 15 seconds</div></div>';
+            } catch (e) { showToast('Connection failed', 'error'); }
+        }
+
+        function updateWiFiConnectStatus(wifiStatus) {
+            if (!wifiConnectPending) return;
+            const el = document.getElementById('wifi-connect-status');
+            if (wifiStatus.connected) {
+                wifiConnectPending = false;
+                loadSavedNetworks();
+                el.innerHTML = '<div style="text-align:center">'
+                    + '<div style="margin-bottom:8px;font-size:14px;color:var(--success, #4ade80)">Connected to ' + wifiStatus.ssid + '</div>'
+                    + '<div style="font-size:13px;color:var(--foreground);margin-bottom:4px">IP: ' + wifiStatus.ip + '</div>'
+                    + '<div style="font-size:12px;color:#888">Access DeskBuddy at <b>http://deskbuddy.local</b><br>or <b>http://' + wifiStatus.ip + '</b></div>'
+                    + '</div>';
+            } else if (wifiStatus.state === 'AP Mode' || wifiStatus.state === 'Connection Failed') {
+                wifiConnectPending = false;
+                const reason = wifiStatus.failReason || 'Connection failed';
+                el.innerHTML = '<div style="text-align:center">'
+                    + '<div style="margin-bottom:8px;font-size:14px;color:var(--destructive)">Could not connect to ' + wifiConnectSSID + '</div>'
+                    + '<div style="font-size:12px;color:#888;margin-bottom:12px">' + reason + '</div>'
+                    + '<button class="btn btn-secondary" onclick="retryWiFi()">Try Again</button>'
+                    + '</div>';
+            }
+        }
+
+        function retryWiFi() {
+            document.getElementById('wifi-connect-status').classList.add('hidden');
+            const form = document.getElementById('wifi-connect-form');
+            form.classList.remove('hidden');
+            document.getElementById('wifi-pass-input').value = '';
+            document.getElementById('wifi-pass-input').focus();
+        }
+
+        async function loadSavedNetworks() {
+            try {
+                const networks = await fetch('/api/wifi/networks').then(r => r.json());
+                const list = document.getElementById('saved-networks-list');
+                const section = document.getElementById('saved-networks-section');
+                if (networks.length === 0) {
+                    section.classList.add('hidden');
+                    return;
+                }
+                section.classList.remove('hidden');
+                list.innerHTML = '';
+                networks.forEach(net => {
+                    const div = document.createElement('div');
+                    div.className = 'wifi-network';
+                    div.style.display = 'flex';
+                    div.style.justifyContent = 'space-between';
+                    div.style.alignItems = 'center';
+                    const info = document.createElement('span');
+                    info.innerHTML = '<span class="wifi-ssid">' + net.ssid + '</span>' + (net.connected ? ' <span style="color:var(--success, #4ade80);font-size:12px">&#x2713; Connected</span>' : '');
+                    div.appendChild(info);
+                    const btn = document.createElement('button');
+                    btn.textContent = 'Remove';
+                    btn.className = 'btn btn-danger';
+                    btn.style.cssText = 'padding:4px 10px;font-size:11px;margin:0;min-width:auto';
+                    btn.onclick = (e) => { e.stopPropagation(); removeNetwork(net.ssid); };
+                    div.appendChild(btn);
+                    list.appendChild(div);
+                });
+            } catch (e) {}
+        }
+
+        async function removeNetwork(ssid) {
+            if (!confirm('Remove ' + ssid + ' from saved networks?')) return;
+            try {
+                await fetch('/api/wifi/remove', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ssid })
+                });
+                showToast('Network removed');
+                loadSavedNetworks();
+            } catch (e) { showToast('Failed', 'error'); }
+        }
+
+        async function forgetWiFi() {
+            if (!confirm('Clear all saved WiFi networks?')) return;
+            try {
+                await fetch('/api/wifi/forget', { method: 'POST' });
+                showToast('All networks cleared');
+                loadSavedNetworks();
+            } catch (e) { showToast('Failed', 'error'); }
+        }
+
+        async function disableWiFi() {
+            if (!confirm('Disable WiFi completely?\\n\\nThis will disconnect this page immediately.\\nUse the device settings menu to re-enable WiFi.')) return;
+            try {
+                await fetch('/api/wifi/disable', { method: 'POST' });
+                showToast('WiFi disabled');
+            } catch (e) { showToast('Failed', 'error'); }
+        }
+
+        // OTA Upload
+        const otaDropzone = document.getElementById('ota-dropzone');
+        const otaFileInput = document.getElementById('ota-file');
+        const otaProgress = document.getElementById('ota-progress');
+        const otaFill = document.getElementById('ota-fill');
+        const otaStatus = document.getElementById('ota-status');
+
+        otaDropzone.addEventListener('click', () => otaFileInput.click());
+        otaDropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            otaDropzone.classList.add('dragover');
+        });
+        otaDropzone.addEventListener('dragleave', () => {
+            otaDropzone.classList.remove('dragover');
+        });
+        otaDropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            otaDropzone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                uploadFirmware(e.dataTransfer.files[0]);
+            }
+        });
+        otaFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                uploadFirmware(e.target.files[0]);
+            }
+        });
+
+        async function uploadFirmware(file) {
+            if (!file.name.endsWith('.bin')) {
+                showToast('Please select a .bin file', 'error');
+                return;
+            }
+            if (!confirm('Upload ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(2) + ' MB)?\\n\\nThe device will restart after update.')) {
+                return;
+            }
+
+            otaDropzone.classList.add('hidden');
+            otaProgress.classList.remove('hidden');
+            otaFill.style.width = '0%';
+            otaStatus.textContent = 'Uploading...';
+            otaStatus.className = 'ota-status';
+
+            try {
+                const response = await fetch('/api/ota/upload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/octet-stream' },
+                    body: file
+                });
+
+                if (response.ok) {
+                    otaFill.style.width = '100%';
+                    otaStatus.textContent = 'Update complete! Restarting...';
+                    otaStatus.classList.add('ota-success');
+                } else {
+                    const err = await response.text();
+                    throw new Error(err || 'Upload failed');
+                }
+            } catch (e) {
+                otaStatus.textContent = 'Error: ' + e.message;
+                otaStatus.classList.add('ota-error');
+                setTimeout(() => {
+                    otaDropzone.classList.remove('hidden');
+                    otaProgress.classList.add('hidden');
+                }, 3000);
+            }
+        }
+
+        async function loadSystemInfo() {
+            try {
+                const info = await fetch('/api/system/info').then(r => r.json());
+                document.getElementById('sys-version').textContent = info.version || '--';
+                document.getElementById('sys-build').textContent = info.buildDate || '--';
+                document.getElementById('sys-partition').textContent = info.partitionLabel || '--';
+                document.getElementById('sys-heap').textContent = info.freeHeap ? Math.round(info.freeHeap / 1024) + ' KB' : '--';
+                document.getElementById('sys-notes').textContent = info.releaseNotes || 'No release notes';
+                document.getElementById('btn-rollback').disabled = !info.canRollback;
+            } catch (e) {
+                console.error('Failed to load system info', e);
+            }
+        }
+
+        async function restartDevice() {
+            if (!confirm('Restart the device?')) return;
+            try {
+                await fetch('/api/system/restart', { method: 'POST' });
+                showToast('Restarting...');
+            } catch (e) {
+                showToast('Failed to restart', 'error');
+            }
+        }
+
+        async function rollbackFirmware() {
+            if (!confirm('Rollback to previous firmware?\\n\\nThe device will restart.')) return;
+            try {
+                await fetch('/api/system/rollback', { method: 'POST' });
+                showToast('Rolling back...');
+            } catch (e) {
+                showToast('Rollback failed', 'error');
+            }
+        }
+
+        // Expression names (matching Expression enum order)
+        const EXPRESSIONS = [
+            'Neutral', 'Happy', 'Sad', 'Surprised', 'Angry', 'Suspicious',
+            'Sleepy', 'Scared', 'Content', 'Startled', 'Grumpy', 'Joyful',
+            'Focused', 'Confused', 'Yawn', 'Petting', 'Dazed', 'Dizzy',
+            'Love', 'Joy', 'Curious', 'Thinking', 'Mischievous', 'Bored',
+            'Alert', 'Smug', 'Dreamy', 'Skeptical', 'Squint', 'Wink'
+        ];
+
+        // Populate color grid
+        const colorGrid = document.getElementById('color-grid');
+        EYE_COLORS.forEach((color, idx) => {
+            const swatch = document.createElement('div');
+            swatch.className = 'color-swatch';
+            swatch.style.background = color.hex;
+            swatch.textContent = color.name;
+            swatch.onclick = () => setEyeColor(idx);
+            colorGrid.appendChild(swatch);
+        });
+
+        async function setEyeColor(idx) {
+            selectColor(idx);
+            const color = EYE_COLORS[idx];
+            document.getElementById('eye-color-dot').style.background = color.hex;
+            document.getElementById('eye-color-name').textContent = color.name;
+            try {
+                await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ eyeColorIndex: idx })
+                });
+                showToast(color.name);
+            } catch (e) {
+                showToast('Failed to set color', 'error');
+            }
+        }
+
+        // Pomodoro slider listeners
+        ['workMinutes', 'shortBreakMinutes', 'longBreakMinutes'].forEach(key => {
+            const el = document.getElementById(key);
+            if (el) el.addEventListener('input', (e) => {
+                document.getElementById(key + '-val').textContent = e.target.value + ' min';
+                updatePomoSetting(key, parseInt(e.target.value));
+            });
+        });
+        const sessEl = document.getElementById('sessionsBeforeLongBreak');
+        if (sessEl) sessEl.addEventListener('input', (e) => {
+            document.getElementById('sessionsBeforeLongBreak-val').textContent = e.target.value;
+            updatePomoSetting('sessionsBeforeLongBreak', parseInt(e.target.value));
+        });
+        const tickEl = document.getElementById('tickingEnabled');
+        if (tickEl) tickEl.addEventListener('change', (e) => {
+            updatePomoSetting('tickingEnabled', e.target.checked);
+        });
+
+        let pomoUpdateTimeout;
+        function updatePomoSetting(key, value) {
+            clearTimeout(pomoUpdateTimeout);
+            pomoUpdateTimeout = setTimeout(() => {
+                fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ [key]: value })
+                });
+            }, 300);
+        }
+
+        // Populate expression grid
+        const exprGrid = document.getElementById('expr-grid');
+        EXPRESSIONS.forEach((name, idx) => {
+            const btn = document.createElement('button');
+            btn.className = 'expr-btn';
+            btn.textContent = name;
+            btn.onclick = () => previewExpression(idx, btn);
+            exprGrid.appendChild(btn);
+        });
+
+        async function previewExpression(index, btn) {
+            // Visual feedback
+            document.querySelectorAll('.expr-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            try {
+                await fetch('/api/expression', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index })
+                });
+                showToast(EXPRESSIONS[index]);
+            } catch (e) {
+                showToast('Failed to preview', 'error');
+            }
+        }
+
+        // Breathing/Wellness
+        // Populate breathing hour selects
+        const breathingStartSel = document.getElementById('breathing-start-hour');
+        const breathingEndSel = document.getElementById('breathing-end-hour');
+        for (let i = 0; i < 24; i++) {
+            const optStart = document.createElement('option');
+            optStart.value = i;
+            optStart.textContent = i.toString().padStart(2, '0') + ':00';
+            breathingStartSel.appendChild(optStart);
+
+            const optEnd = document.createElement('option');
+            optEnd.value = i;
+            optEnd.textContent = i.toString().padStart(2, '0') + ':00';
+            breathingEndSel.appendChild(optEnd);
+        }
+        // Set defaults
+        breathingStartSel.value = 9;
+        breathingEndSel.value = 17;
+
+        // Breathing interval slider
+        const breathingIntervalEl = document.getElementById('breathing-interval');
+        breathingIntervalEl.addEventListener('input', (e) => {
+            document.getElementById('breathing-interval-val').textContent = e.target.value + ' min';
+            updateBreathingSetting('breathingIntervalMinutes', parseInt(e.target.value));
+        });
+
+        // Breathing enabled toggle
+        document.getElementById('breathing-enabled').addEventListener('change', (e) => {
+            updateBreathingSetting('breathingEnabled', e.target.checked);
+            document.getElementById('breathing-schedule-card').style.opacity = e.target.checked ? '1' : '0.5';
+        });
+
+        // Breathing sound toggle
+        document.getElementById('breathing-sound-enabled').addEventListener('change', (e) => {
+            updateBreathingSetting('breathingSoundEnabled', e.target.checked);
+        });
+
+        // Breathing hour selects
+        breathingStartSel.addEventListener('change', () => {
+            updateBreathingSetting('breathingStartHour', parseInt(breathingStartSel.value));
+        });
+        breathingEndSel.addEventListener('change', () => {
+            updateBreathingSetting('breathingEndHour', parseInt(breathingEndSel.value));
+        });
+
+        // Exercise type dropdown
+        document.getElementById('breathing-type').addEventListener('change', (e) => {
+            const typeVal = parseInt(e.target.value);
+            updateBreathingSetting('breathingExerciseType', typeVal);
+            updateBreathingDesc(typeVal);
+        });
+
+        function updateBreathingDesc(typeVal) {
+            const desc = document.getElementById('breathing-desc');
+            if (typeVal === 1) {
+                desc.textContent = 'Alternate nostril: inhale left, hold, exhale right, inhale right, hold, exhale left \u00d7 3 cycles (72 seconds)';
+            } else {
+                desc.textContent = 'Inhale 5s, hold 5s, exhale 5s, hold 5s \u00d7 3 cycles (60 seconds total)';
+            }
+        }
+
+        let breathingUpdateTimeout;
+        function updateBreathingSetting(key, value) {
+            clearTimeout(breathingUpdateTimeout);
+            breathingUpdateTimeout = setTimeout(() => {
+                fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ [key]: value })
+                });
+            }, 300);
+        }
+
+        async function startBreathing() {
+            try {
+                await fetch('/api/breathing/start', { method: 'POST' });
+                showToast('Breathing exercise started');
+            } catch (e) {
+                showToast('Failed to start breathing', 'error');
+            }
+        }
+
+        // ============== ASSISTANT FUNCTIONS ==============
+
+        async function loadAssistantStatus() {
+            try {
+                const resp = await fetch('/api/assistant/status');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    document.getElementById('assistant-state').textContent = data.state || 'Idle';
+                    document.getElementById('assistant-tokens').textContent =
+                        (data.contextTokens || 0) + ' / 8000';
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        async function clearAssistantHistory() {
+            if (!confirm('Clear conversation history?')) return;
+            try {
+                await fetch('/api/assistant/clear', { method: 'POST' });
+                showToast('History cleared');
+                loadAssistantStatus();
+            } catch (e) {
+                showToast('Failed to clear history', 'error');
+            }
+        }
+
+        function updateMcpConfig() {
+            document.getElementById('mcp-endpoint').textContent =
+                'http://' + deviceIP + ':3001/sse';
+            const config = JSON.stringify({
+                "deskbuddy": {
+                    "command": "npx",
+                    "args": ["-y", "mcp-remote", "http://" + deviceIP + ":3001/sse", "--allow-http"]
+                }
+            }, null, 2);
+            document.getElementById('mcp-claude-config').textContent = config;
+        }
+
+        async function loadMcpServers() {
+            try {
+                const resp = await fetch('/api/mcp/servers');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    updateMcpServersList(data.servers || []);
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        function copyMcpConfig() {
+            const text = document.getElementById('mcp-claude-config').textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = document.getElementById('mcp-copy-btn');
+                btn.textContent = 'Copied!';
+                setTimeout(() => btn.textContent = 'Copy', 2000);
+            });
+        }
+
+        function updateMcpServersList(servers) {
+            const container = document.getElementById('mcp-servers-list');
+            if (servers.length === 0) {
+                container.innerHTML = '<p style="color: var(--muted-foreground); font-style: italic;">No MCP servers configured</p>';
+                return;
+            }
+            container.innerHTML = servers.map((s, i) => `
+                <div class="status-row" style="align-items: flex-start;">
+                    <div>
+                        <span class="status-dot" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: ${s.connected ? 'var(--status-active)' : 'var(--destructive)'};"></span>
+                        <strong>${s.name}</strong>
+                        <div style="color: var(--muted-foreground); font-size: 12px; margin-left: 16px;">${s.url}</div>
+                        ${s.toolCount ? '<div style="color: var(--muted-foreground); font-size: 12px; margin-left: 16px;">' + s.toolCount + ' tools</div>' : ''}
+                        ${s.error ? '<div style="color: var(--destructive); font-size: 12px; margin-left: 16px;">' + s.error + '</div>' : ''}
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-secondary" onclick="editMcpServer(${i})" style="padding: 4px 12px;">Edit</button>
+                        <button class="btn btn-danger" onclick="deleteMcpServer(${i})" style="padding: 4px 12px;">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function showAddMcpServer() {
+            document.getElementById('mcp-modal-title').textContent = 'Add MCP Server';
+            document.getElementById('mcp-name').value = '';
+            document.getElementById('mcp-url').value = '';
+            document.getElementById('mcp-apikey').value = '';
+            document.getElementById('mcp-edit-index').value = '-1';
+            document.getElementById('mcp-modal').style.display = 'flex';
+        }
+
+        async function editMcpServer(index) {
+            try {
+                const resp = await fetch('/api/mcp/servers');
+                const data = await resp.json();
+                const server = data.servers[index];
+                if (server) {
+                    document.getElementById('mcp-modal-title').textContent = 'Edit MCP Server';
+                    document.getElementById('mcp-name').value = server.name;
+                    document.getElementById('mcp-url').value = server.url;
+                    document.getElementById('mcp-apikey').value = '';
+                    document.getElementById('mcp-edit-index').value = index;
+                    document.getElementById('mcp-modal').style.display = 'flex';
+                }
+            } catch (e) {
+                showToast('Failed to load server', 'error');
+            }
+        }
+
+        function closeMcpModal() {
+            document.getElementById('mcp-modal').style.display = 'none';
+        }
+
+        async function saveMcpServer() {
+            const name = document.getElementById('mcp-name').value.trim();
+            const url = document.getElementById('mcp-url').value.trim();
+            const apiKey = document.getElementById('mcp-apikey').value;
+            const editIndex = parseInt(document.getElementById('mcp-edit-index').value);
+
+            if (!name || !url) {
+                showToast('Name and URL required', 'error');
+                return;
+            }
+
+            try {
+                const endpoint = editIndex >= 0 ? '/api/mcp/servers/' + editIndex : '/api/mcp/servers';
+                const method = editIndex >= 0 ? 'PUT' : 'POST';
+                await fetch(endpoint, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, url, apiKey })
+                });
+                closeMcpModal();
+                showToast('Server saved');
+                loadMcpServers();
+            } catch (e) {
+                showToast('Failed to save server', 'error');
+            }
+        }
+
+        async function deleteMcpServer(index) {
+            if (!confirm('Delete this MCP server?')) return;
+            try {
+                await fetch('/api/mcp/servers/' + index, { method: 'DELETE' });
+                showToast('Server deleted');
+                loadMcpServers();
+            } catch (e) {
+                showToast('Failed to delete server', 'error');
+            }
+        }
+
+        async function discoverMcpTools() {
+            try {
+                showToast('Discovering tools...');
+                await fetch('/api/mcp/discover', { method: 'POST' });
+                loadMcpServers();
+                showToast('Tools refreshed');
+            } catch (e) {
+                showToast('Discovery failed', 'error');
+            }
+        }
+
+        function updateLlmKeyPlaceholder() {
+            const provider = document.getElementById('llm-provider').value;
+            const label = document.getElementById('llm-key-label');
+            const input = document.getElementById('llm-api-key');
+            if (provider === 'openai') {
+                label.textContent = 'OpenAI API Key';
+                input.placeholder = 'sk-...';
+            } else {
+                label.textContent = 'Claude API Key';
+                input.placeholder = 'sk-ant-...';
+            }
+        }
+
+        async function testLlmApi() {
+            const key = document.getElementById('llm-api-key').value;
+            const provider = document.getElementById('llm-provider').value;
+            try {
+                const resp = await fetch('/api/assistant/test/llm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ apiKey: key, provider })
+                });
+                const data = await resp.json();
+                showToast(data.success ? 'LLM API OK' : 'LLM API failed: ' + data.error, data.success ? 'success' : 'error');
+            } catch (e) {
+                showToast('Test failed', 'error');
+            }
+        }
+
+        async function testVoiceApi() {
+            const key = document.getElementById('openai-voice-key').value;
+            try {
+                const resp = await fetch('/api/assistant/test/voice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ apiKey: key })
+                });
+                const data = await resp.json();
+                showToast(data.success ? 'Voice API OK' : 'Voice API failed: ' + data.error, data.success ? 'success' : 'error');
+            } catch (e) {
+                showToast('Test failed', 'error');
+            }
+        }
+
+        async function previewVoice() {
+            const voice = document.getElementById('tts-voice').value;
+            try {
+                await fetch('/api/assistant/preview-voice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ voice })
+                });
+                showToast('Playing voice preview');
+            } catch (e) {
+                showToast('Preview failed', 'error');
+            }
+        }
+
+        async function saveAssistantSettings() {
+            const settings = {
+                llmProvider: document.getElementById('llm-provider').value,
+                llmApiKey: document.getElementById('llm-api-key').value,
+                openaiVoiceKey: document.getElementById('openai-voice-key').value,
+                ttsVoice: document.getElementById('tts-voice').value,
+                ttsSpeed: parseFloat(document.getElementById('tts-speed').value),
+                wakeWordEnabled: document.getElementById('wake-word-enabled').checked,
+                pttEnabled: document.getElementById('ptt-enabled').checked,
+                wakeSensitivity: parseInt(document.getElementById('wake-sensitivity').value),
+                systemPrompt: document.getElementById('system-prompt').value
+            };
+            try {
+                await fetch('/api/assistant/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+                showToast('Assistant settings saved');
+            } catch (e) {
+                showToast('Failed to save settings', 'error');
+            }
+        }
+
+        async function loadAssistantSettings() {
+            try {
+                const resp = await fetch('/api/assistant/settings');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.llmProvider) {
+                        document.getElementById('llm-provider').value = data.llmProvider;
+                        updateLlmKeyPlaceholder();
+                    }
+                    if (data.llmApiKey) document.getElementById('llm-api-key').value = data.llmApiKey;
+                    if (data.openaiVoiceKey) document.getElementById('openai-voice-key').value = data.openaiVoiceKey;
+                    if (data.ttsVoice) document.getElementById('tts-voice').value = data.ttsVoice;
+                    if (data.ttsSpeed) {
+                        document.getElementById('tts-speed').value = data.ttsSpeed;
+                        document.getElementById('tts-speed-val').textContent = data.ttsSpeed + 'x';
+                    }
+                    if (data.wakeWordEnabled !== undefined) document.getElementById('wake-word-enabled').checked = data.wakeWordEnabled;
+                    if (data.pttEnabled !== undefined) document.getElementById('ptt-enabled').checked = data.pttEnabled;
+                    if (data.wakeSensitivity !== undefined) {
+                        document.getElementById('wake-sensitivity').value = data.wakeSensitivity;
+                        document.getElementById('wake-sensitivity-val').textContent = data.wakeSensitivity + '%';
+                    }
+                    if (data.systemPrompt) document.getElementById('system-prompt').value = data.systemPrompt;
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        // Assistant slider handlers
+        document.getElementById('tts-speed')?.addEventListener('input', function() {
+            document.getElementById('tts-speed-val').textContent = this.value + 'x';
+        });
+        document.getElementById('wake-sensitivity')?.addEventListener('input', function() {
+            document.getElementById('wake-sensitivity-val').textContent = this.value + '%';
+        });
+
+        // Load assistant data when tab is selected
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                if (tab.dataset.tab === 'assistant') {
+                    loadAssistantStatus();
+                    loadMcpServers();
+                }
+            });
+        });
+
+        // Load settings when settings accordion opens
+        const origToggleAccordion = window.toggleAccordion;
+        window.toggleAccordion = function(name) {
+            if (name === 'assistant-settings') {
+                loadAssistantSettings();
+            }
+            if (name === 'wifi') {
+                loadSavedNetworks();
+            }
+            if (origToggleAccordion) origToggleAccordion(name);
+        };
+
+        // Init
+        loadData();
+        loadSavedNetworks();
+        setInterval(loadData, 1000);
+    </script>
+</body>
+</html>
+)rawliteral";
+
+#endif // WEB_UI_HTML_H
