@@ -4,6 +4,7 @@
  */
 
 #include "mcp_client.h"
+#include "oauth_client.h"
 #include "http_helpers.h"
 #include <Preferences.h>
 #include <NetworkClientSecure.h>
@@ -20,6 +21,7 @@ static const char* PREFS_NAMESPACE = "mcp_client";
 
 MCPClient::MCPClient()
     : initialized(false)
+    , oauthClient(nullptr)
 {
 }
 
@@ -33,6 +35,10 @@ MCPClient::~MCPClient() {
 
 bool MCPClient::begin() {
     if (initialized) return true;
+
+    // Initialize OAuth client
+    oauthClient = new OAuthClient();
+    oauthClient->begin();
 
     // Load saved server configurations
     loadConfig();
@@ -48,6 +54,12 @@ void MCPClient::end() {
     saveConfig();
     servers.clear();
     tools.clear();
+
+    if (oauthClient) {
+        oauthClient->end();
+        delete oauthClient;
+        oauthClient = nullptr;
+    }
 
     initialized = false;
     Serial.println("[MCP Client] Shutdown");
@@ -180,10 +192,11 @@ bool MCPClient::discoverServerTools(int index) {
     String body;
     serializeJson(reqDoc, body);
 
-    // Make request
+    // Make request (serverIndex enables OAuth token injection)
     String url = server.url + "/mcp/tools/list";
-    String response = makeRequest(url.c_str(), "POST", body.c_str(),
-                                   server.apiKey.length() > 0 ? server.apiKey.c_str() : nullptr);
+    String response = makeRequestWithRetry(url.c_str(), "POST", body.c_str(),
+                                            server.apiKey.length() > 0 ? server.apiKey.c_str() : nullptr,
+                                            index);
 
     if (response.length() == 0) {
         server.connected = false;
@@ -304,10 +317,11 @@ String MCPClient::executeTool(const char* toolName, const char* arguments) {
     String body;
     serializeJson(reqDoc, body);
 
-    // Make request
+    // Make request (serverIndex enables OAuth token injection)
     String url = server.url + "/mcp/tools/call";
-    String response = makeRequest(url.c_str(), "POST", body.c_str(),
-                                   server.apiKey.length() > 0 ? server.apiKey.c_str() : nullptr);
+    String response = makeRequestWithRetry(url.c_str(), "POST", body.c_str(),
+                                            server.apiKey.length() > 0 ? server.apiKey.c_str() : nullptr,
+                                            tool->serverIndex);
 
     Serial.printf("[MCP Client] Executed %s: %s\n", toolName,
                   response.length() > 100 ? (response.substring(0, 100) + "...").c_str() : response.c_str());
@@ -331,6 +345,11 @@ void MCPClient::registerToolsWithLLM(std::function<bool(const char*, const char*
 //=============================================================================
 
 String MCPClient::makeRequest(const char* url, const char* method, const char* body, const char* apiKey) {
+    return makeRequestWithRetry(url, method, body, apiKey, -1);
+}
+
+String MCPClient::makeRequestWithRetry(const char* url, const char* method, const char* body,
+                                         const char* apiKey, int serverIndex) {
     HTTPClient http;
     NetworkClientSecure* secureClient = nullptr;
 
@@ -338,6 +357,7 @@ String MCPClient::makeRequest(const char* url, const char* method, const char* b
     bool isHttps = String(url).startsWith("https://");
     if (isHttps) {
         secureClient = HttpHelpers::createSecureClient();
+        if (!secureClient) return "";
         http.begin(*secureClient, url);
     } else {
         http.begin(url);
@@ -346,8 +366,23 @@ String MCPClient::makeRequest(const char* url, const char* method, const char* b
     http.setTimeout(MCP_HTTP_TIMEOUT);
     http.addHeader("Content-Type", "application/json");
 
-    if (apiKey && strlen(apiKey) > 0) {
-        http.addHeader("Authorization", String("Bearer ") + apiKey);
+    // Determine auth token: OAuth takes priority over API key
+    String authToken;
+    bool usingOAuth = false;
+    if (serverIndex >= 0 && serverIndex < (int)servers.size() &&
+        servers[serverIndex].authMode == MCPAuthMode::OAuth && oauthClient) {
+        authToken = oauthClient->getAccessToken(serverIndex);
+        usingOAuth = true;
+        if (authToken.isEmpty()) {
+            servers[serverIndex].lastError = "OAuth: needs authorization";
+            Serial.printf("[MCP Client] No OAuth token for server %d\n", serverIndex);
+        }
+    } else if (apiKey && strlen(apiKey) > 0) {
+        authToken = apiKey;
+    }
+
+    if (authToken.length() > 0) {
+        http.addHeader("Authorization", "Bearer " + authToken);
     }
 
     int httpCode;
@@ -360,15 +395,27 @@ String MCPClient::makeRequest(const char* url, const char* method, const char* b
     String response;
     if (httpCode > 0) {
         response = http.getString();
+
+        // On 401 with OAuth: try refreshing token and retry once
+        if (httpCode == 401 && usingOAuth && oauthClient) {
+            Serial.printf("[MCP Client] 401 from server %d, attempting token refresh\n", serverIndex);
+            http.end();
+            delete secureClient;
+
+            // Refresh and retry
+            String newToken = oauthClient->getAccessToken(serverIndex);
+            if (!newToken.isEmpty() && newToken != authToken) {
+                return makeRequestWithRetry(url, method, body, nullptr, -1);  // Retry without recursion risk
+            }
+            servers[serverIndex].lastError = "OAuth: authorization expired";
+            return "";
+        }
     } else {
         Serial.printf("[MCP Client] HTTP error: %d\n", httpCode);
     }
 
     http.end();
-
-    if (secureClient) {
-        delete secureClient;
-    }
+    delete secureClient;
 
     return response;
 }
@@ -389,6 +436,9 @@ void MCPClient::saveConfig() {
         prefs.putString((prefix + "url").c_str(), servers[i].url);
         prefs.putString((prefix + "key").c_str(), servers[i].apiKey);
         prefs.putBool((prefix + "on").c_str(), servers[i].enabled);
+        prefs.putUChar((prefix + "auth").c_str(), (uint8_t)servers[i].authMode);
+        prefs.putString((prefix + "cid").c_str(), servers[i].clientId);
+        prefs.putString((prefix + "csec").c_str(), servers[i].clientSecret);
     }
 
     prefs.end();
@@ -409,6 +459,9 @@ void MCPClient::loadConfig() {
         config.url = prefs.getString((prefix + "url").c_str(), "");
         config.apiKey = prefs.getString((prefix + "key").c_str(), "");
         config.enabled = prefs.getBool((prefix + "on").c_str(), true);
+        config.authMode = (MCPAuthMode)prefs.getUChar((prefix + "auth").c_str(), 0);
+        config.clientId = prefs.getString((prefix + "cid").c_str(), "");
+        config.clientSecret = prefs.getString((prefix + "csec").c_str(), "");
         config.connected = false;
 
         if (config.name.length() > 0 && config.url.length() > 0) {

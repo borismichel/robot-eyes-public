@@ -254,8 +254,7 @@ private:
     // Error handling
     char lastError[128];
 
-    // HTTP client
-    NetworkClientSecure* secureClient;
+    // HTTP (no persistent client — created on-demand per request to save ~40KB heap)
 
     // Callbacks
     TranscriptCallback transcriptCallback;

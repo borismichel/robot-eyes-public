@@ -35,7 +35,9 @@ I2SDuplex::I2SDuplex()
     , rxHandle(nullptr)
     , mutex(nullptr)
     , currentMicLevel(0.0f)
-    , micAttenuation(1.0f) {  // No attenuation by default (0dB)
+    , micAttenuation(1.0f)  // No attenuation by default (0dB)
+    , levelHpfPrevInput(0.0f)
+    , levelHpfPrevOutput(0.0f) {
     memset(micBuffer, 0, sizeof(micBuffer));
 }
 
@@ -162,12 +164,14 @@ bool I2SDuplex::initTxChannel() {
 }
 
 bool I2SDuplex::initRxChannel() {
-    // Channel configuration for RX
+    // RX needs larger DMA than TX: the main loop drains RX in bursts and
+    // long display frames (50-100ms) can cause overflow with small buffers.
+    // 12 × 1024 = 12288 frames ≈ 280ms at 44.1kHz stereo — plenty of headroom.
     i2s_chan_config_t chanCfg = {
         .id = I2S_NUM_0,
         .role = I2S_ROLE_MASTER,
-        .dma_desc_num = I2S_DMA_BUF_COUNT,
-        .dma_frame_num = I2S_DMA_BUF_LEN,
+        .dma_desc_num = 12,
+        .dma_frame_num = 1024,
         .auto_clear = false,
     };
 
@@ -304,28 +308,36 @@ float I2SDuplex::getMicLevel() {
         return 0.0f;
     }
 
-    // Read samples into buffer
+    // Read stereo samples into buffer
     size_t samplesRead = read(micBuffer, MIC_BUFFER_SIZE);
     if (samplesRead == 0) {
-        return currentMicLevel * 0.95f;  // Decay if no new samples
+        currentMicLevel *= 0.95f;  // Decay if no new samples
+        return currentMicLevel;
     }
 
-    // Calculate RMS (Root Mean Square) of samples
+    // I2S RX is stereo (shared bus with stereo TX). ES8311 ADC is mono,
+    // outputting on left channel only. Extract left from interleaved L,R,L,R
+    // and apply DC-removal HPF (same as captureAudio in voice_input.cpp).
+    size_t monoSamples = samplesRead / 2;
+    const float alpha = 0.995f;  // HPF cutoff ~35Hz at 44.1kHz
     float sumSquares = 0.0f;
-    for (size_t i = 0; i < samplesRead; i++) {
-        float sample = micBuffer[i] / 32768.0f;  // Normalize to -1.0 to 1.0
-        sample *= micAttenuation;  // Apply software attenuation for negative gain
+
+    for (size_t i = 0; i < monoSamples; i++) {
+        float input = (float)micBuffer[i * 2];  // Left channel only
+
+        // Single-pole high-pass filter to remove DC offset
+        levelHpfPrevOutput = alpha * (levelHpfPrevOutput + input - levelHpfPrevInput);
+        levelHpfPrevInput = input;
+
+        float sample = (levelHpfPrevOutput * micAttenuation) / 32768.0f;
         sumSquares += sample * sample;
     }
 
-    float rms = sqrtf(sumSquares / samplesRead);
+    float rms = (monoSamples > 0) ? sqrtf(sumSquares / monoSamples) : 0.0f;
 
-    // Smooth the level (fast attack, slow decay)
-    if (rms > currentMicLevel) {
-        currentMicLevel = currentMicLevel + (rms - currentMicLevel) * 0.5f;
-    } else {
-        currentMicLevel = currentMicLevel + (rms - currentMicLevel) * 0.1f;
-    }
+    // Symmetric smoothing — avoids ratcheting up from transient spikes
+    const float smoothFactor = 0.3f;
+    currentMicLevel = currentMicLevel * (1.0f - smoothFactor) + rms * smoothFactor;
 
     return currentMicLevel;
 }

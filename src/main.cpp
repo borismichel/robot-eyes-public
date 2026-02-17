@@ -40,12 +40,14 @@
 #include "assistant/device_tools.h"
 #include "assistant/mcp_client.h"
 #include "assistant/assistant.h"
+#include "ui/text_renderer.h"
 
 #define SCREEN_WIDTH  368
 #define SCREEN_HEIGHT 448
 #define TOUCH_ADDR    0x38
 
 // Touch gesture thresholds (ms)
+#define TAP_MIN_DURATION    50    // Min duration for a tap (filters ghost touches)
 #define TAP_MAX_DURATION    300   // Max duration for a tap
 #define HOLD_MIN_DURATION   500   // Min duration to count as hold
 #define PET_MIN_DURATION    2000  // Min duration to trigger petting response
@@ -184,8 +186,10 @@ TouchGesture detectGesture() {
         return TouchGesture::Pet;
     } else if (duration >= HOLD_MIN_DURATION) {
         return TouchGesture::Hold;
-    } else if (duration < TAP_MAX_DURATION) {
+    } else if (duration >= TAP_MIN_DURATION && duration < TAP_MAX_DURATION) {
         return TouchGesture::Tap;
+    } else if (duration < TAP_MIN_DURATION) {
+        Serial.printf("Ghost touch filtered (%lums)\n", duration);
     }
     return TouchGesture::None;
 }
@@ -199,6 +203,7 @@ bool readTouch() {
     if (Wire.available() < 5) return false;
 
     uint8_t touchCount = Wire.read() & 0x0F;
+    if (touchCount > 5) return false;  // I2C corruption — max 5 touch points
     uint32_t now = millis();
 
     // Read first touch point data
@@ -637,6 +642,10 @@ void setup() {
         return false;
     };
 
+    deviceToolCallbacks.onSay = [](const char* text) -> bool {
+        return assistant.say(text);
+    };
+
     // Initialize voice assistant from saved settings
     {
         Preferences assistantPrefs;
@@ -655,12 +664,13 @@ void setup() {
 
         String ttsVoice = assistantPrefs.getString("ttsVoice", "alloy");
         strncpy(assistantConfig.voiceConfig.openAIVoice, ttsVoice.c_str(), sizeof(assistantConfig.voiceConfig.openAIVoice) - 1);
-        assistantConfig.voiceConfig.speed = assistantPrefs.getFloat("ttsSpeed", 1.0f);
+        float storedSpeed = assistantPrefs.getFloat("ttsSpeed", 0.85f);
+        assistantConfig.voiceConfig.speed = storedSpeed;
 
         String sttLang = assistantPrefs.getString("sttLang", "");
         strncpy(assistantConfig.sttLanguage, sttLang.c_str(), sizeof(assistantConfig.sttLanguage) - 1);
 
-        String sysPrompt = assistantPrefs.getString("sysPrompt", "You are DeskBuddy, a friendly desk companion. Always reply in the same language the user speaks. Keep responses concise and conversational.");
+        String sysPrompt = assistantPrefs.getString("sysPrompt", "You are DeskBuddy, a friendly desk companion. Reply in the user's language. Keep ALL responses to 1-2 short sentences — you speak aloud through a tiny speaker. No markdown or emojis.");
         strncpy(assistantConfig.systemPrompt, sysPrompt.c_str(), sizeof(assistantConfig.systemPrompt) - 1);
 
         assistantPrefs.end();
@@ -1412,6 +1422,43 @@ void loop() {
             gfx->endWrite();
             return;  // Skip normal blit path
         } else {
+            // Check for active assistant state — full-screen text replaces eyes
+            AssistantState aState = assistant.getState();
+            if (aState == AssistantState::Listening ||
+                aState == AssistantState::Processing ||
+                aState == AssistantState::Speaking) {
+
+                memset(eyeBuffer, 0, COMBINED_BUF_WIDTH * COMBINED_BUF_HEIGHT * sizeof(uint16_t));
+
+                const char* stateText = nullptr;
+                switch (aState) {
+                    case AssistantState::Listening:  stateText = "LISTENING"; break;
+                    case AssistantState::Processing: stateText = "THINKING";  break;
+                    case AssistantState::Speaking:    stateText = "ANSWERING"; break;
+                    default: break;
+                }
+                if (stateText) {
+                    TextRenderer::drawCenteredText(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                                   COMBINED_BUF_HEIGHT / 2, COMBINED_BUF_WIDTH / 2 - 30,
+                                                   stateText, renderer.getColor(), 6);
+                }
+
+                // Show user's query below THINKING (not during ANSWERING)
+                if (aState == AssistantState::Processing) {
+                    const char* transcript = assistant.getLastResponse();
+                    if (transcript && strlen(transcript) > 0) {
+                        TextRenderer::drawWrappedText(eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
+                                                      COMBINED_BUF_HEIGHT / 2, COMBINED_BUF_WIDTH / 2 + 40,
+                                                      transcript, renderer.getColor(), 3, 22);
+                    }
+                }
+
+                compositor.fullBlit();
+                compositor.prevFrameWasMenu = true;
+                compositor.invalidatePrevRects();
+                return;
+            }
+
             // Normal eye rendering
             renderer.renderToBuf(leftEye, eyeBuffer, COMBINED_BUF_WIDTH, COMBINED_BUF_HEIGHT,
                                  leftCX, leftEyePos.baseY, true, false);

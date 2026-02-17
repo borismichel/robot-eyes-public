@@ -24,7 +24,7 @@
 
 // Forward declarations
 class AudioGenerator;
-class AudioFileSourceLittleFS;
+class AudioFileSource;
 class AudioOutput;
 
 /**
@@ -115,6 +115,37 @@ public:
      */
     float getMicAttenuation() const { return micAttenuation; }
 
+    //-------------------------------------------------------------------------
+    // Streaming PCM (bypasses AudioGenerator, writes directly to I2S)
+    //-------------------------------------------------------------------------
+
+    /**
+     * @brief Start streaming raw PCM to I2S
+     * Stops any file-based playback and configures rate conversion.
+     * @param sampleRate Source sample rate (e.g., 24000)
+     * @param channels 1=mono, 2=stereo
+     * @param bitsPerSample 16
+     * @return true if ready to stream
+     */
+    bool startStreamingPCM(int sampleRate, int channels, int bitsPerSample);
+
+    /**
+     * @brief Feed raw PCM bytes (called from TTS chunk callback)
+     * Handles partial samples at chunk boundaries.
+     * Blocks on I2S DMA when buffer is full (natural backpressure).
+     */
+    void feedPCMBytes(const uint8_t* data, size_t length);
+
+    /**
+     * @brief Finish streaming, flush remaining audio
+     */
+    void finishStreamingPCM();
+
+    /**
+     * @brief Check if streaming PCM is active
+     */
+    bool isStreamingPCM() const { return streamingPCM; }
+
 private:
     /**
      * @brief Initialize the ES8311 audio codec
@@ -128,9 +159,20 @@ private:
     float micAttenuation;   ///< Mic software attenuation (1.0 = 0dB, <1.0 = negative gain)
 
     // ESP8266Audio components
-    AudioGenerator* generator;          ///< Current decoder (MP3 or WAV)
-    AudioFileSourceLittleFS* file;  ///< Current audio file
+    AudioGenerator* generator;      ///< Current decoder (MP3 or WAV)
+    AudioFileSource* file;          ///< Current audio source
     AudioOutput* out;               ///< Audio output (uses I2SDuplex)
+
+    // PSRAM buffer for flash-free playback
+    uint8_t* psramBuffer;           ///< File data buffered in PSRAM
+    size_t psramBufferSize;         ///< Size of PSRAM buffer
+
+    void freePsramBuffer();
+
+    // Streaming PCM state
+    bool streamingPCM;              ///< Currently streaming raw PCM to I2S
+    int streamChannels;             ///< 1=mono, 2=stereo
+    int streamTrailingByte;         ///< Leftover byte from previous chunk (-1 = none)
 
     // Thread synchronization
     SemaphoreHandle_t audioMutex;   ///< Mutex for mp3/file access between cores

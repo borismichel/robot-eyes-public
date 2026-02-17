@@ -311,7 +311,7 @@ esp_err_t es8311_microphone_config(es8311_handle_t dev, bool digital_mic)
     if (digital_mic) {
         reg14 |= BIT(6);
     }
-    es8311_write_reg(dev, ES8311_ADC_REG17, 0x90); // ADC volume (reduced from 0xBF to avoid clipping)
+    es8311_write_reg(dev, ES8311_ADC_REG17, 0x00); // ADC volume — set later by setMicGain()
 
     return es8311_write_reg(dev, ES8311_SYSTEM_REG14, reg14);
 }
@@ -403,6 +403,11 @@ esp_err_t es8311_voice_mute(es8311_handle_t dev, bool mute)
 esp_err_t es8311_microphone_gain_set(es8311_handle_t dev, es8311_mic_gain_t gain_db)
 {
     return es8311_write_reg(dev, ES8311_ADC_REG16, gain_db); // ADC gain scale up
+}
+
+esp_err_t es8311_microphone_volume_set(es8311_handle_t dev, uint8_t volume)
+{
+    return es8311_write_reg(dev, ES8311_ADC_REG17, volume); // ADC volume
 }
 
 esp_err_t es8311_voice_fade(es8311_handle_t dev, const es8311_fade_t fade)

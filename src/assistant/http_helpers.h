@@ -16,16 +16,6 @@ inline NetworkClientSecure* createSecureClient() {
     return c;
 }
 
-/// Recreate a secure client to clear any poisoned connection state.
-/// Deletes the old client and returns a fresh one.
-inline void resetSecureClient(NetworkClientSecure*& client) {
-    if (client) {
-        client->stop();
-        delete client;
-    }
-    client = createSecureClient();
-}
-
 } // namespace HttpHelpers
 
 #endif // HTTP_HELPERS_H

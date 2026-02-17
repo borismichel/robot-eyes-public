@@ -12,7 +12,8 @@ AudioOutputDuplex::AudioOutputDuplex()
     : i2s(nullptr)
     , gain(1.0f)
     , started(false)
-    , accumulator(0) {
+    , accumulator(0)
+    , outBufPos(0) {
 }
 
 AudioOutputDuplex::~AudioOutputDuplex() {
@@ -31,17 +32,13 @@ bool AudioOutputDuplex::begin() {
         }
     }
 
+    outBufPos = 0;
     started = true;
     Serial.println("AudioOutputDuplex: Started");
     return true;
 }
 
 bool AudioOutputDuplex::ConsumeSample(int16_t sample[2]) {
-    static bool loggedOnce = false;
-    if (!loggedOnce) {
-        loggedOnce = true;
-        Serial.printf("AudioOutputDuplex: ConsumeSample hertz=%d\n", hertz);
-    }
     if (!started || !i2s) {
         return false;
     }
@@ -52,7 +49,8 @@ bool AudioOutputDuplex::ConsumeSample(int16_t sample[2]) {
 
     // No rate conversion needed (or rate not set yet)
     if (hertz <= 0 || hertz == 44100) {
-        return i2s->writeSample(left, right);
+        bufferSample(left, right);
+        return true;
     }
 
     // Rate conversion using Bresenham-like accumulator.
@@ -61,9 +59,20 @@ bool AudioOutputDuplex::ConsumeSample(int16_t sample[2]) {
     accumulator += 44100;
     while (accumulator >= (uint32_t)hertz) {
         accumulator -= hertz;
-        i2s->writeSample(left, right);
+        bufferSample(left, right);
     }
     return true;
+}
+
+void AudioOutputDuplex::flushBuffer() {
+    if (outBufPos > 0 && i2s) {
+        i2s->write(outBuf, outBufPos);
+        outBufPos = 0;
+    }
+}
+
+void AudioOutputDuplex::flush() {
+    flushBuffer();
 }
 
 bool AudioOutputDuplex::SetRate(int hz) {
@@ -74,6 +83,7 @@ bool AudioOutputDuplex::SetRate(int hz) {
 }
 
 bool AudioOutputDuplex::stop() {
+    flushBuffer();
     started = false;
     // Don't shut down I2S - leave it running for microphone
     return true;

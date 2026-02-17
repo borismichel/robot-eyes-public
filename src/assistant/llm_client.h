@@ -198,6 +198,12 @@ public:
     void queueToolResult(const char* toolUseId, const char* result);
 
     /**
+     * @brief Send follow-up request using current history
+     * Used after queueing tool results to get the next LLM response.
+     */
+    LLMResponse sendFollowUp();
+
+    /**
      * @brief Clear conversation history
      */
     void clearHistory();
@@ -350,8 +356,7 @@ private:
     std::vector<ToolDefinition> tools;
     ToolExecutor toolExecutor;
 
-    // HTTP client
-    NetworkClientSecure* secureClient;
+    // HTTP (no persistent client — created on-demand per request to save ~40KB heap)
     HTTPClient http;
 };
 

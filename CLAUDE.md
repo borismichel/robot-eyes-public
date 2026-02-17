@@ -21,7 +21,7 @@ There are TWO folders/repos:
 ### Version File
 Version is defined in `include/version.h`:
 ```cpp
-#define FIRMWARE_VERSION "2.0.0"
+#define FIRMWARE_VERSION "2.1.0"
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 ```
 
@@ -79,7 +79,7 @@ releases/
 
 ---
 
-## Architecture Overview (v2.0.0)
+## Architecture Overview (v2.1.0)
 
 The firmware uses a modular class-based architecture. Each module follows the `begin(deps...)`/`update()` lifecycle pattern and owns its own state. `main.cpp` (~1,464 lines) serves as the orchestrator: it wires modules together in `setup()` and runs the frame loop in `loop()`.
 
@@ -289,11 +289,15 @@ Voice assistant stack in `src/assistant/`:
 
 ### Architecture
 - **LLM Client** (`llm_client.h`): Supports Claude Sonnet 4 or GPT-4o, configurable via web UI
-- **STT Client** (`stt_client.h`): OpenAI Whisper, 16kHz mono streaming
-- **TTS Client** (`tts_client.h`): OpenAI TTS
-- **Wake Word** (`wake_word.h`): ESP-SR local detection for "Hey Buddy" (no API needed)
+- **STT Client** (`stt_client.h`): OpenAI Whisper, 16kHz mono streaming, crest factor noise gate (CF<3.5 rejects noise)
+- **TTS Client** (`tts_client.h`): OpenAI TTS (WAV format, chunked transfer)
+- **Wake Word** (`wake_word.h`): ESP-SR local detection for "Hey Buddy" (stub mode — disabled)
 - **Voice Input** (`voice_input.h`): Ring buffer for microphone audio (16kHz, 2-second capacity)
+- **OAuth Client** (`oauth_client.h`): OAuth 2.1 with PKCE for authenticated MCP connections
 - **Assistant** (`assistant.h`): Main orchestrator tying STT -> LLM -> TTS together
+  - Voice pipeline runs on dedicated FreeRTOS task (Core 1, priority 2)
+  - TTS streams PCM directly to I2S (WAV header parsed from first 44 bytes)
+  - `ttsInterrupted` volatile flag for thread-safe interrupt during streaming
 
 ### Device Tools (`device_tools.h`)
 
@@ -331,6 +335,7 @@ Voice assistant stack in `src/assistant/`:
 - Up to 8 MCP servers, 16 tools per server
 - 10s HTTP timeout
 - Configurable via web UI Assistant tab
+- OAuth 2.1 support via `AuthMode` enum (None, Bearer, OAuth) and `oauth_client.h`
 
 ---
 

@@ -19,7 +19,6 @@ STTClient::STTClient()
     , audioBufferPos(0)
     , audioBufferSize(STT_MAX_AUDIO_BUFFER)
     , transcriptReady(false)
-    , secureClient(nullptr)
     , transcriptCallback(nullptr)
     , errorCallback(nullptr)
 {
@@ -55,14 +54,6 @@ bool STTClient::begin(const char* key) {
         return false;
     }
 
-    secureClient = HttpHelpers::createSecureClient();
-    if (!secureClient) {
-        Serial.println("[STT] ERROR: Failed to create secure client");
-        free(audioBuffer);
-        audioBuffer = nullptr;
-        return false;
-    }
-
     initialized = true;
     state = STTState::Idle;
     Serial.printf("[STT] Initialized with OpenAI Whisper (buffer: %d bytes)\n", audioBufferSize);
@@ -75,11 +66,6 @@ void STTClient::end() {
     if (audioBuffer) {
         free(audioBuffer);
         audioBuffer = nullptr;
-    }
-
-    if (secureClient) {
-        delete secureClient;
-        secureClient = nullptr;
     }
 
     initialized = false;
@@ -126,9 +112,13 @@ void STTClient::logAudioStats() {
             if (samples[i] == 0) zeroCount++;
         }
         float avgAbs = (float)sumAbs / numSamples;
-        Serial.printf("[STT] Audio stats: peak=%d avg=%.1f zeros=%d/%d (%.0f%%)\n",
-                      peak, avgAbs, zeroCount, numSamples,
+        float cf = avgAbs > 0 ? (float)peak / avgAbs : 0;
+        Serial.printf("[STT] Audio stats: peak=%d avg=%.1f CF=%.1f zeros=%d/%d (%.0f%%)\n",
+                      peak, avgAbs, cf, zeroCount, numSamples,
                       100.0f * zeroCount / numSamples);
+        if (cf < 3.5f && peak > 500) {
+            Serial.println("[STT] Warning: low crest factor suggests noise, not speech");
+        }
     }
 }
 
@@ -154,6 +144,44 @@ bool STTClient::stopRecording() {
             errorCallback(lastError);
         }
         return false;
+    }
+
+    // Check audio quality before sending to Whisper.
+    // Two checks: (1) minimum peak for silence, (2) crest factor for noise.
+    {
+        const int16_t* samples = (const int16_t*)audioBuffer;
+        size_t numSamples = audioBufferPos / 2;
+        int16_t peak = 0;
+        int64_t sumAbs = 0;
+        for (size_t i = 0; i < numSamples; i++) {
+            int16_t s = samples[i] < 0 ? -samples[i] : samples[i];
+            if (s > peak) peak = s;
+            sumAbs += s;
+        }
+
+        if (peak < 500) {
+            Serial.printf("[STT] Audio too quiet (peak=%d), skipping Whisper\n", peak);
+            snprintf(lastError, sizeof(lastError), "No speech detected");
+            state = STTState::Idle;
+            return false;
+        }
+
+        // Crest factor = peak / avgAbs. Speech typically has CF > 4 (dynamic range
+        // between peaks and average). Amplified noise has CF ≈ 2-3.5 (flat, dense).
+        // When mic gain is too high, noise fills the buffer and Whisper hallucinates
+        // in random languages. Reject recordings that look like noise.
+        float avgAbs = (float)sumAbs / numSamples;
+        if (avgAbs > 0) {
+            float crestFactor = (float)peak / avgAbs;
+            if (crestFactor < 3.5f) {
+                Serial.printf("[STT] Audio looks like noise, not speech (CF=%.1f, peak=%d, avg=%.0f)\n",
+                              crestFactor, peak, avgAbs);
+                Serial.println("[STT] Hint: try lowering Mic Gain in settings");
+                snprintf(lastError, sizeof(lastError), "No speech detected (noise)");
+                state = STTState::Idle;
+                return false;
+            }
+        }
     }
 
     // Transcribe the audio
@@ -234,7 +262,11 @@ bool STTClient::saveAsWav(const char* path) {
 bool STTClient::transcribe() {
     state = STTState::Transcribing;
     uint32_t whisperStart = millis();
-    Serial.printf("[STT] Sending %d bytes to Whisper API...\n", audioBufferPos);
+    Serial.printf("[STT] Sending %d bytes to Whisper API (lang=%s)...\n",
+                  audioBufferPos, language[0] ? language : "auto");
+    if (language[0] == '\0') {
+        Serial.println("[STT] Tip: set STT Language in web settings to prevent hallucinations");
+    }
 
     // Generate boundary for multipart form
     String boundary = "----ESP32Boundary" + String(millis());
@@ -267,8 +299,8 @@ bool STTClient::transcribe() {
     // Calculate total content length
     size_t contentLength = formStart.length() + 44 + wavDataSize + formModel.length() + formLanguage.length() + formEnd.length();
 
-    // Reset secure client to clear any stale connection state
-    HttpHelpers::resetSecureClient(secureClient);
+    // Create SSL client on-demand (saves ~40KB heap when idle)
+    NetworkClientSecure* secureClient = HttpHelpers::createSecureClient();
     if (!secureClient) {
         Serial.println("[STT] Failed to create secure client");
         state = STTState::Error;
@@ -281,6 +313,7 @@ bool STTClient::transcribe() {
     // trying to push the entire payload through SSL at once.
     if (!secureClient->connect(WHISPER_API_HOST, 443)) {
         Serial.println("[STT] Failed to connect to Whisper API");
+        delete secureClient;
         snprintf(lastError, sizeof(lastError), "Connection failed");
         state = STTState::Error;
         if (errorCallback) errorCallback(lastError);
@@ -308,6 +341,7 @@ bool STTClient::transcribe() {
         if (written == 0) {
             Serial.printf("[STT] Write failed at %u/%u bytes\n", sent, wavDataSize);
             secureClient->stop();
+            delete secureClient;
             snprintf(lastError, sizeof(lastError), "Write failed");
             state = STTState::Error;
             if (errorCallback) errorCallback(lastError);
@@ -328,6 +362,7 @@ bool STTClient::transcribe() {
         if (millis() - responseStart > STT_HTTP_TIMEOUT_MS) {
             Serial.println("[STT] Response timeout");
             secureClient->stop();
+            delete secureClient;
             snprintf(lastError, sizeof(lastError), "Response timeout");
             state = STTState::Error;
             if (errorCallback) errorCallback(lastError);
@@ -343,10 +378,15 @@ bool STTClient::transcribe() {
         httpCode = statusLine.substring(9, 12).toInt();
     }
 
-    // Skip headers
+    // Skip headers (check for chunked encoding)
+    bool isChunked = false;
     while (secureClient->connected()) {
         String line = secureClient->readStringUntil('\n');
         if (line == "\r" || line.length() == 0) break;
+        if (line.indexOf("chunked") >= 0) {
+            isChunked = true;
+            Serial.println("[STT] Warning: response is chunked");
+        }
     }
 
     // Read response body
@@ -360,11 +400,11 @@ bool STTClient::transcribe() {
         if (millis() - responseStart > STT_HTTP_TIMEOUT_MS) break;
     }
     secureClient->stop();
+    delete secureClient;
+
+    Serial.printf("[STT] HTTP %d, body (%d bytes): %.200s\n", httpCode, responseBody.length(), responseBody.c_str());
 
     if (httpCode != 200) {
-        Serial.printf("[STT] HTTP error: %d\n", httpCode);
-        Serial.printf("[STT] Response: %.200s\n", responseBody.c_str());
-
         snprintf(lastError, sizeof(lastError), "HTTP %d", httpCode);
         state = STTState::Error;
 
@@ -372,6 +412,16 @@ bool STTClient::transcribe() {
             errorCallback(lastError);
         }
         return false;
+    }
+
+    // If response is chunked, strip chunk headers before parsing
+    if (isChunked && responseBody.length() > 0) {
+        int jsonStart = responseBody.indexOf('{');
+        int jsonEnd = responseBody.lastIndexOf('}');
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            responseBody = responseBody.substring(jsonStart, jsonEnd + 1);
+            Serial.printf("[STT] Dechunked body: %s\n", responseBody.c_str());
+        }
     }
 
     // Parse response

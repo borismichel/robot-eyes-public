@@ -15,7 +15,6 @@
 TTSClient::TTSClient()
     : state(TTSState::Idle)
     , initialized(false)
-    , secureClient(nullptr)
     , contentLength(0)
     , bytesReceived(0)
     , audioChunkCallback(nullptr)
@@ -45,12 +44,6 @@ bool TTSClient::begin(const char* key) {
 
     setApiKey(key);
 
-    secureClient = HttpHelpers::createSecureClient();
-    if (!secureClient) {
-        Serial.println("[TTS] ERROR: Failed to create secure client");
-        return false;
-    }
-
     initialized = true;
     state = TTSState::Idle;
 
@@ -62,11 +55,6 @@ void TTSClient::end() {
     if (!initialized) return;
 
     stop();
-
-    if (secureClient) {
-        delete secureClient;
-        secureClient = nullptr;
-    }
 
     initialized = false;
     Serial.println("[TTS] Shutdown");
@@ -104,7 +92,9 @@ bool TTSClient::speak(const char* text) {
         return false;
     }
 
-    Serial.printf("[TTS] Speaking: %.50s%s\n", text, strlen(text) > 50 ? "..." : "");
+    Serial.printf("[TTS] Speaking (voice=%s speed=%.2f): %.50s%s\n",
+                  voiceConfig.openAIVoice, voiceConfig.speed,
+                  text, strlen(text) > 50 ? "..." : "");
 
     return requestOpenAI(text);
 }
@@ -143,13 +133,13 @@ bool TTSClient::requestOpenAI(const char* text) {
     doc["input"] = text;
     doc["voice"] = voiceConfig.openAIVoice;
     doc["speed"] = voiceConfig.speed;
-    doc["response_format"] = "mp3";
+    doc["response_format"] = "wav";
 
     String body;
     serializeJson(doc, body);
 
-    // Reset secure client to clear any stale connection state
-    HttpHelpers::resetSecureClient(secureClient);
+    // Create SSL client on-demand (saves ~40KB heap when idle)
+    NetworkClientSecure* secureClient = HttpHelpers::createSecureClient();
     if (!secureClient) {
         Serial.println("[TTS] Failed to create secure client");
         setState(TTSState::Error);
@@ -173,6 +163,7 @@ bool TTSClient::requestOpenAI(const char* text) {
 
         snprintf(lastError, sizeof(lastError), "HTTP %d", httpCode);
         http.end();
+        delete secureClient;
         setState(TTSState::Error);
 
         if (errorCallback) {
@@ -181,41 +172,40 @@ bool TTSClient::requestOpenAI(const char* text) {
         return false;
     }
 
-    // Read entire response body inline (blocking).
-    // The whole voice pipeline is synchronous (STT blocks, LLM blocks),
-    // so blocking here is fine and avoids async stream detection issues.
+    // Read entire response body using writeToStream which handles
+    // chunked transfer encoding transparently. The raw getStreamPtr()
+    // was leaking chunk headers (e.g. "765\r\n") into the audio data.
     contentLength = http.getSize();
     bytesReceived = 0;
 
     Serial.printf("[TTS] HTTP 200 in %lums, reading %d bytes of audio...\n", ttsHttpElapsed, contentLength);
     setState(TTSState::Streaming);
 
-    NetworkClient* stream = http.getStreamPtr();
-    if (stream) {
-        uint32_t readStart = millis();
-        while (stream->connected() || stream->available()) {
-            size_t available = stream->available();
-            if (available > 0) {
-                size_t toRead = min(available, sizeof(audioBuffer));
-                size_t bytesRead = stream->readBytes(audioBuffer, toRead);
-                if (bytesRead > 0) {
-                    bytesReceived += bytesRead;
-                    if (audioChunkCallback) {
-                        audioChunkCallback(audioBuffer, bytesRead);
-                    }
-                }
-            } else {
-                delay(1);  // Yield while waiting for more data
-            }
-            // Safety timeout
-            if (millis() - readStart > TTS_HTTP_TIMEOUT_MS) {
-                Serial.println("[TTS] Read timeout");
-                break;
-            }
+    // Stream adapter that forwards dechunked data to our callback.
+    // writeToStream requires Stream* — we only use the write side.
+    class ChunkForwarder : public Stream {
+    public:
+        ChunkForwarder(AudioChunkCallback& cb, size_t& received)
+            : callback(cb), bytesReceived(received) {}
+        size_t write(uint8_t b) override { return write(&b, 1); }
+        size_t write(const uint8_t* buf, size_t size) override {
+            bytesReceived += size;
+            if (callback) callback(buf, size);
+            return size;
         }
-    }
+        int available() override { return 0; }
+        int read() override { return -1; }
+        int peek() override { return -1; }
+    private:
+        AudioChunkCallback& callback;
+        size_t& bytesReceived;
+    };
+
+    ChunkForwarder forwarder(audioChunkCallback, bytesReceived);
+    http.writeToStream(&forwarder);
 
     http.end();
+    delete secureClient;
 
     Serial.printf("[TTS] Read %u bytes of audio\n", bytesReceived);
     setState(TTSState::Complete);

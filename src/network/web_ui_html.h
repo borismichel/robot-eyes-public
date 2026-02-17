@@ -926,9 +926,9 @@ static const char WEB_UI_HTML[] PROGMEM = R"rawliteral(
                     <div class="form-group">
                         <div class="form-label">
                             <span>Speech Speed</span>
-                            <span class="form-value" id="tts-speed-val">1.0x</span>
+                            <span class="form-value" id="tts-speed-val">0.9x</span>
                         </div>
-                        <input type="range" id="tts-speed" min="0.5" max="2.0" step="0.1" value="1.0">
+                        <input type="range" id="tts-speed" min="0.5" max="2.0" step="0.05" value="0.85">
                     </div>
 
                     <div class="card-title" style="margin-top: 24px;">Activation</div>
@@ -2122,10 +2122,10 @@ static const char WEB_UI_HTML[] PROGMEM = R"rawliteral(
             if (!confirm('Restart the device?')) return;
             try {
                 await fetch('/api/system/restart', { method: 'POST' });
-                showToast('Restarting...');
             } catch (e) {
-                showToast('Failed to restart', 'error');
+                // Network error expected — device is restarting
             }
+            showToast('Restarting...');
         }
 
         async function rollbackFirmware() {

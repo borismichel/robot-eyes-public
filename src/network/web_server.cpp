@@ -1235,12 +1235,12 @@ esp_err_t WebServerManager::handleGetAssistantSettings(httpd_req_t* req) {
     doc["llmApiKey"] = prefs.getString("llmKey", "").length() > 0 ? "********" : "";
     doc["openaiVoiceKey"] = prefs.getString("voiceKey", "").length() > 0 ? "********" : "";
     doc["ttsVoice"] = prefs.getString("ttsVoice", "alloy");
-    doc["ttsSpeed"] = prefs.getFloat("ttsSpeed", 1.0);
+    doc["ttsSpeed"] = prefs.getFloat("ttsSpeed", 0.85);
     doc["sttLanguage"] = prefs.getString("sttLang", "");
     doc["wakeWordEnabled"] = prefs.getBool("wakeWord", true);
     doc["pttEnabled"] = prefs.getBool("ptt", true);
     doc["wakeSensitivity"] = prefs.getInt("wakeSens", 50);
-    doc["systemPrompt"] = prefs.getString("sysPrompt", "You are DeskBuddy, a friendly desk companion. Always reply in the same language the user speaks. Keep responses concise and conversational.");
+    doc["systemPrompt"] = prefs.getString("sysPrompt", "You are DeskBuddy, a friendly desk companion. Reply in the user's language. Keep ALL responses to 1-2 short sentences — you speak aloud through a tiny speaker. No markdown or emojis.");
 
     prefs.end();
 
@@ -1325,10 +1325,10 @@ esp_err_t WebServerManager::handlePostAssistantSettings(httpd_req_t* req) {
         strncpy(cfg.openaiVoiceKey, voiceKey.c_str(), sizeof(cfg.openaiVoiceKey) - 1);
         String ttsVoice = reloadPrefs.getString("ttsVoice", "alloy");
         strncpy(cfg.voiceConfig.openAIVoice, ttsVoice.c_str(), sizeof(cfg.voiceConfig.openAIVoice) - 1);
-        cfg.voiceConfig.speed = reloadPrefs.getFloat("ttsSpeed", 1.0f);
+        cfg.voiceConfig.speed = reloadPrefs.getFloat("ttsSpeed", 0.85f);
         String sttLang = reloadPrefs.getString("sttLang", "");
         strncpy(cfg.sttLanguage, sttLang.c_str(), sizeof(cfg.sttLanguage) - 1);
-        String sysPrompt = reloadPrefs.getString("sysPrompt", "You are DeskBuddy, a friendly desk companion. Always reply in the same language the user speaks. Keep responses concise and conversational.");
+        String sysPrompt = reloadPrefs.getString("sysPrompt", "You are DeskBuddy, a friendly desk companion. Reply in the user's language. Keep ALL responses to 1-2 short sentences — you speak aloud through a tiny speaker. No markdown or emojis.");
         strncpy(cfg.systemPrompt, sysPrompt.c_str(), sizeof(cfg.systemPrompt) - 1);
 
         reloadPrefs.end();

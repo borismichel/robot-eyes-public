@@ -174,6 +174,13 @@ public:
     void interrupt();
 
     /**
+     * @brief Speak text via TTS (blocking, for MCP/tool use)
+     * @param text Text to speak
+     * @return true if TTS started successfully
+     */
+    bool say(const char* text);
+
+    /**
      * @brief Start listening for voice input (tap to listen)
      */
     void startListening();
@@ -306,9 +313,15 @@ private:
     void initTTSPlayback();
 
     /**
-     * @brief Execute tool calls from LLM
+     * @brief Execute tool calls and queue results in LLM history
      */
     void executeToolCalls(const std::vector<ToolCall>& calls);
+
+    /**
+     * @brief Voice pipeline runs on background task (STT→LLM→TTS)
+     */
+    void processVoicePipeline();
+    static void voiceTaskFunc(void* param);
 
     // State
     AssistantState state;
@@ -337,11 +350,16 @@ private:
     char lastResponse[1024];
     char lastEmotion[32];
     uint32_t speakingStartTime;
+    uint32_t processingStartTime;
 
-    // MP3 playback buffer
-    uint8_t* ttsAudioBuffer;
-    size_t ttsAudioSize;
-    size_t ttsAudioWritePos;
+    // TTS streaming
+    size_t ttsAudioWritePos;        ///< Bytes received from TTS API
+    uint8_t ttsWavHeader[44];       ///< Buffer for WAV header parsing
+    volatile bool ttsInterrupted;   ///< Flag to discard remaining TTS data
+
+    // Voice processing background task
+    TaskHandle_t voiceTaskHandle;
+    SemaphoreHandle_t voiceProcessSem;
 
     // Callbacks
     AssistantStateCallback stateCallback;

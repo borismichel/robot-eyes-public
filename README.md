@@ -32,16 +32,18 @@ Expressive robot eyes for ESP32-S3 with AMOLED display, voice assistant, and MCP
 ### Voice Assistant
 - **LLM**: Claude (Sonnet 4) or OpenAI (GPT-4o), user-configurable
 - **Speech-to-Text**: OpenAI Whisper (streaming 16kHz mono)
-- **Text-to-Speech**: OpenAI TTS
+- **Text-to-Speech**: OpenAI TTS (streaming PCM — audio starts in ~1-2 seconds)
 - **Wake word**: ESP-SR local detection ("Hey Buddy"), no cloud required
 - **Tap-to-Listen**: Single tap starts listening, second tap stops and processes
 - **STT Language**: Configurable Whisper language hint (ISO 639-1) for improved accuracy
 - **Tool use**: LLM can control device tools + external MCP server tools
 - **Full-duplex audio**: Simultaneous TTS output and STT input via ES8311 codec
+- **Ghost touch filter**: Minimum tap duration + I2C validation prevents phantom triggers
+- **Noise gate**: Crest factor-based STT rejection filters ambient noise before Whisper
 
 ### MCP Integration
 - **MCP Server** (port 3001): Exposes DeskBuddy tools to external Claude instances via SSE transport
-- **MCP Client**: Connects to external MCP servers for additional tool discovery (up to 8 servers, 16 tools each)
+- **MCP Client**: Connects to external MCP servers for additional tool discovery (up to 8 servers, 16 tools each, OAuth 2.1 support)
 - **14 device tools** available via both LLM and MCP:
   - `set_expression` - Change facial expression (18 named expressions)
   - `set_timer` / `cancel_timer` - Countdown timer with on-screen progress
@@ -233,7 +235,7 @@ src/
 │   ├── imu_handler.h/.cpp          # QMI8658 IMU: tilt, shake, orientation
 │   └── audio_handler.h/.cpp        # Ambient noise detection
 ├── audio/
-│   ├── audio_player.h/.cpp         # MP3 playback (FreeRTOS task)
+│   ├── audio_player.h/.cpp         # MP3 playback + streaming PCM (FreeRTOS task)
 │   ├── audio_output_duplex.h/.cpp  # Sample rate conversion
 │   └── i2s_duplex.h/.cpp           # ES8311 I2S full-duplex driver
 ├── ui/
@@ -259,6 +261,7 @@ src/
     ├── voice_input.h/.cpp          # Mic ring buffer
     ├── mcp_server.h/.cpp           # MCP SSE server
     ├── mcp_client.h/.cpp           # External MCP client
+    ├── oauth_client.h/.cpp         # OAuth 2.1 client (PKCE, NVS tokens)
     ├── device_tools.h/.cpp         # Tool definitions + callbacks
     └── http_helpers.h              # Shared secure client factory
 
@@ -396,9 +399,9 @@ The display is physically rotated 90 degrees CCW:
 
 - **Rendering**: 30fps software per-pixel evaluation, RGB565 framebuffer in PSRAM
 - **Optimization**: Dirty-rect clearing, partial screen blit, shape-aware bounds
-- **Processing**: Display on Core 1, audio decoding on Core 0, MCP server on dedicated task
-- **Storage**: Settings persisted via Preferences (NVS), audio via LittleFS
-- **Memory**: ~20% RAM, ~26% Flash (v2.0.0)
+- **Processing**: Display on Core 1, audio decoding on Core 0, voice pipeline on Core 1 task, MCP server on dedicated task
+- **Storage**: Settings persisted via Preferences (NVS), audio via LittleFS, OAuth tokens via NVS
+- **Memory**: ~20% RAM, ~26% Flash (v2.1.0)
 
 ### Dependencies
 - `lvgl/lvgl@^8.4.0` - Display driver

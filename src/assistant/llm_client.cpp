@@ -13,12 +13,11 @@
 
 static const char* DEFAULT_SYSTEM_PROMPT =
     "You are DeskBuddy, a helpful and friendly desk companion robot with expressive eyes. "
-    "You have a playful personality and enjoy helping your human friend with tasks. "
-    "Keep responses concise and conversational - you're speaking out loud. "
-    "You can control your expressions, start timers, guide breathing exercises "
-    "(box breathing and Nadi Shodhana alternate nostril breathing), and help with productivity. "
-    "When appropriate, include an emotion hint in brackets at the start of your response, "
-    "like [happy], [curious], [thinking], or [excited].";
+    "You have a playful personality and enjoy helping your human friend. "
+    "IMPORTANT: Keep ALL responses to 1-2 short sentences — you speak aloud through a tiny speaker. "
+    "Always reply in the same language the user speaks. Be direct and concise — no filler or follow-up questions. "
+    "You can control your expressions, start timers, and guide breathing exercises. "
+    "Use emotion hints in brackets at the start, like [happy] or [curious].";
 
 //=============================================================================
 // Constructor / Destructor
@@ -29,7 +28,6 @@ LLMClient::LLMClient()
     , provider(LLMProvider::Claude)
     , contextTokens(0)
     , toolExecutor(nullptr)
-    , secureClient(nullptr)
 {
     memset(apiKey, 0, sizeof(apiKey));
     memset(lastError, 0, sizeof(lastError));
@@ -55,12 +53,6 @@ bool LLMClient::begin(const char* key, LLMProvider prov) {
     setApiKey(key);
     provider = prov;
 
-    secureClient = HttpHelpers::createSecureClient();
-    if (!secureClient) {
-        Serial.println("[LLM] ERROR: Failed to create secure client");
-        return false;
-    }
-
     initialized = true;
     Serial.printf("[LLM] Initialized with %s\n",
                   provider == LLMProvider::Claude ? "Claude" : "OpenAI");
@@ -72,11 +64,6 @@ void LLMClient::end() {
 
     clearHistory();
     clearTools();
-
-    if (secureClient) {
-        delete secureClient;
-        secureClient = nullptr;
-    }
 
     initialized = false;
     Serial.println("[LLM] Shutdown");
@@ -204,6 +191,39 @@ void LLMClient::queueToolResult(const char* toolUseId, const char* result) {
     addMessage(MessageRole::Tool, result, toolUseId, nullptr, nullptr);
 }
 
+LLMResponse LLMClient::sendFollowUp() {
+    LLMResponse response;
+    response.success = false;
+
+    if (!initialized) {
+        response.error = "Not initialized";
+        return response;
+    }
+
+    String body;
+    if (provider == LLMProvider::Claude) {
+        body = buildClaudeRequest(nullptr);
+    } else {
+        body = buildOpenAIRequest(nullptr);
+    }
+
+    response = makeRequest(body);
+
+    if (response.success) {
+        if (!response.toolCalls.empty()) {
+            for (const auto& tc : response.toolCalls) {
+                addMessage(MessageRole::Assistant, response.text.c_str(),
+                          tc.id.c_str(), tc.name.c_str(), tc.input.c_str());
+            }
+        } else {
+            addMessage(MessageRole::Assistant, response.text.c_str());
+        }
+        response.emotion = extractEmotion(response.text.c_str());
+    }
+
+    return response;
+}
+
 void LLMClient::clearHistory() {
     history.clear();
     contextTokens = 0;
@@ -259,7 +279,11 @@ String LLMClient::buildClaudeRequest(const char* newUserMessage) {
 
     doc["model"] = CLAUDE_MODEL;
     doc["max_tokens"] = LLM_MAX_TOKENS;
-    doc["system"] = systemPrompt;
+
+    // Append mandatory voice output rules to any user-provided system prompt
+    String fullPrompt = systemPrompt;
+    fullPrompt += "\nRules: 1-2 short sentences only. No markdown. No emojis. Always include your answer text alongside any tool calls.";
+    doc["system"] = fullPrompt;
 
     JsonArray messages = doc["messages"].to<JsonArray>();
 
@@ -365,10 +389,12 @@ String LLMClient::buildOpenAIRequest(const char* newUserMessage) {
 
     JsonArray messages = doc["messages"].to<JsonArray>();
 
-    // Add system message
+    // Add system message with mandatory voice output rules
+    String fullPromptOAI = systemPrompt;
+    fullPromptOAI += "\nRules: 1-2 short sentences only. No markdown. No emojis. Always include your answer text alongside any tool calls.";
     JsonObject sysMsg = messages.add<JsonObject>();
     sysMsg["role"] = "system";
-    sysMsg["content"] = systemPrompt;
+    sysMsg["content"] = fullPromptOAI;
 
     // Add history — merge consecutive assistant tool_call messages
     for (size_t i = 0; i < history.size(); i++) {
@@ -466,8 +492,8 @@ LLMResponse LLMClient::makeRequest(const String& body) {
         url += OPENAI_API_PATH;
     }
 
-    // Reset secure client to clear any stale connection state
-    HttpHelpers::resetSecureClient(secureClient);
+    // Create SSL client on-demand (saves ~40KB heap when idle)
+    NetworkClientSecure* secureClient = HttpHelpers::createSecureClient();
     if (!secureClient) {
         snprintf(lastError, sizeof(lastError), "Client alloc failed");
         response.error = lastError;
@@ -499,12 +525,14 @@ LLMResponse LLMClient::makeRequest(const String& body) {
         snprintf(lastError, sizeof(lastError), "HTTP %d", httpCode);
         response.error = lastError;
         http.end();
+        delete secureClient;
         return response;
     }
 
     Serial.printf("[LLM] HTTP 200 in %lums\n", httpElapsed);
     String responseBody = http.getString();
     http.end();
+    delete secureClient;
 
     if (provider == LLMProvider::Claude) {
         return parseClaudeResponse(responseBody.c_str());

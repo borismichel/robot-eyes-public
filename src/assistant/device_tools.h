@@ -2,7 +2,7 @@
  * @file device_tools.h
  * @brief Tool definitions for LLM and MCP device control
  *
- * Defines 14 tools available via both LLM tool use and MCP server:
+ * Defines 15 tools available via both LLM tool use and MCP server:
  * - Expression control (set_expression)
  * - Timer management (set_timer, cancel_timer)
  * - Productivity (start_pomodoro, stop_pomodoro)
@@ -10,7 +10,7 @@
  * - Wellness (start_breathing)
  * - Settings (set_volume, set_brightness, set_eye_color)
  * - System info (get_device_info)
- * - Audio (play_sound)
+ * - Audio (play_sound, say)
  */
 
 #ifndef DEVICE_TOOLS_H
@@ -171,6 +171,18 @@ static const char* SET_BRIGHTNESS_SCHEMA = R"json({
     "required": ["brightness"]
 })json";
 
+// JSON schema for say tool
+static const char* SAY_SCHEMA = R"json({
+    "type": "object",
+    "properties": {
+        "text": {
+            "type": "string",
+            "description": "The text to speak aloud through the device speaker"
+        }
+    },
+    "required": ["text"]
+})json";
+
 // JSON schema for set_eye_color tool
 static const char* SET_EYE_COLOR_SCHEMA = R"({
     "type": "object",
@@ -305,6 +317,14 @@ inline void registerDeviceTools(LLMClient& llm) {
         "purple, white, red, blue.",
         SET_EYE_COLOR_SCHEMA
     );
+
+    // Say - Speak text aloud via TTS
+    llm.addTool(
+        "say",
+        "Speak text aloud through the device speaker using text-to-speech. "
+        "Use this to make the robot say something specific.",
+        SAY_SCHEMA
+    );
 }
 
 /**
@@ -371,6 +391,11 @@ inline void registerMcpDeviceTools(MCPServer& mcp) {
     mcp.addTool("set_eye_color",
         "Change the eye color: cyan, pink, green, orange, purple, white, red, blue.",
         SET_EYE_COLOR_SCHEMA);
+
+    mcp.addTool("say",
+        "Speak text aloud through the device speaker using text-to-speech. "
+        "Use this to make the robot say something specific.",
+        SAY_SCHEMA);
 }
 
 //=============================================================================
@@ -398,6 +423,7 @@ struct DeviceToolCallbacks {
     std::function<void(int)> onSetVolume;
     std::function<void(int)> onSetBrightness;
     std::function<bool(const char* color)> onSetEyeColor;
+    std::function<bool(const char* text)> onSay;
 };
 
 // Global callbacks instance
@@ -607,6 +633,22 @@ inline String executeDeviceTool(const char* toolName, const char* input) {
             }
         } else {
             result["error"] = "Eye color control not available";
+        }
+    }
+    // Say (TTS)
+    else if (strcmp(toolName, "say") == 0) {
+        const char* text = doc["text"] | "";
+
+        if (deviceToolCallbacks.onSay) {
+            bool ok = deviceToolCallbacks.onSay(text);
+            if (ok) {
+                result["success"] = true;
+                result["text"] = text;
+            } else {
+                result["error"] = "TTS not available or assistant busy";
+            }
+        } else {
+            result["error"] = "TTS not available";
         }
     }
     // Unknown tool

@@ -30,10 +30,10 @@
 #define I2S_BITS_PER_SAMPLE 16
 
 /** Number of DMA buffers */
-#define I2S_DMA_BUF_COUNT   8
+#define I2S_DMA_BUF_COUNT   12
 
 /** Samples per DMA buffer */
-#define I2S_DMA_BUF_LEN     256
+#define I2S_DMA_BUF_LEN     512
 
 /** Microphone read buffer size (samples) */
 #define MIC_BUFFER_SIZE     512
@@ -134,6 +134,7 @@ public:
      * @param attenuation Multiplier (1.0 = 0dB, 0.0625 = -24dB)
      */
     void setMicAttenuation(float attenuation) { micAttenuation = attenuation; }
+    float getMicAttenuation() const { return micAttenuation; }
 
     //-------------------------------------------------------------------------
     // Configuration
@@ -176,6 +177,10 @@ private:
     float currentMicLevel;
     float micAttenuation;  // Software attenuation for negative gain (1.0 = 0dB)
     int16_t micBuffer[MIC_BUFFER_SIZE];
+
+    // DC offset removal for mic level monitoring (high-pass filter state)
+    float levelHpfPrevInput;
+    float levelHpfPrevOutput;
 };
 
 #endif // I2S_DUPLEX_H

@@ -25,6 +25,7 @@
 #include <AudioGeneratorMP3.h>
 #include <AudioGeneratorWAV.h>
 #include <AudioFileSourceLittleFS.h>
+#include <AudioFileSourcePROGMEM.h>
 
 //=============================================================================
 // Static Variables
@@ -47,13 +48,18 @@ static AudioPlayer* audioPlayerInstance = nullptr;
  * @brief FreeRTOS task for audio playback
  *
  * Runs on Core 0 to avoid blocking the display loop on Core 1.
- * Continuously feeds the MP3 decoder while playback is active.
+ * During playback, runs a tight decode loop — the blocking I2S write
+ * inside ConsumeSample provides natural yielding. When idle, sleeps
+ * to save CPU.
  */
 void audioTask(void* parameter) {
     AudioPlayer* player = (AudioPlayer*)parameter;
     while (true) {
         player->taskUpdate();
-        vTaskDelay(1);  // Yield to other tasks, ~1ms delay
+        if (!player->isPlaying()) {
+            vTaskDelay(pdMS_TO_TICKS(10));  // Idle: save CPU
+        }
+        // During playback: no delay — blocking I2S write yields naturally
     }
 }
 
@@ -68,6 +74,11 @@ AudioPlayer::AudioPlayer()
     , generator(nullptr)
     , file(nullptr)
     , out(nullptr)
+    , psramBuffer(nullptr)
+    , psramBufferSize(0)
+    , streamingPCM(false)
+    , streamChannels(1)
+    , streamTrailingByte(-1)
     , taskRunning(false)
     , audioMutex(nullptr) {
     // Create mutex for thread-safe access to mp3/file between cores
@@ -86,6 +97,7 @@ AudioPlayer::~AudioPlayer() {
     delete generator;
     delete file;
     delete out;
+    freePsramBuffer();
 
     // Delete the mutex
     if (audioMutex) {
@@ -130,7 +142,7 @@ bool AudioPlayer::initCodec() {
     // Configure codec for BOTH playback AND recording (full-duplex)
     // Enable microphone with conservative gain for speech capture
     es8311_microphone_config(es8311Handle, false);  // false = analog mic
-    es8311_microphone_gain_set(es8311Handle, ES8311_MIC_GAIN_0DB);  // 0dB digital gain — PGA alone provides signal, normalization boosts for playback
+    es8311_microphone_gain_set(es8311Handle, ES8311_MIC_GAIN_0DB);  // 0dB digital gain — ADC volume set by setMicGain()
 
     // Dump ES8311 registers for debugging audio issues
     Serial.println("AudioPlayer: ES8311 register dump after init:");
@@ -195,7 +207,7 @@ bool AudioPlayer::begin() {
         "AudioTask",        // Task name
         8192,               // Stack size (bytes)
         this,               // Parameter
-        1,                  // Priority
+        10,                 // Priority (high enough to avoid WiFi preemption gaps)
         &audioTaskHandle,   // Task handle
         0                   // Core 0
     );
@@ -211,8 +223,13 @@ bool AudioPlayer::begin() {
 //=============================================================================
 
 /**
- * @brief Play an MP3 file from LittleFS
- * @param filename Path to MP3 file (e.g., "/happy.mp3")
+ * @brief Play an audio file from LittleFS
+ *
+ * Reads the entire file into PSRAM first, then decodes from memory.
+ * This eliminates SPI flash contention during playback, which was
+ * causing choppy audio on longer files.
+ *
+ * @param filename Path to audio file (e.g., "/happy.mp3")
  * @return true if playback started successfully
  */
 bool AudioPlayer::play(const char* filename) {
@@ -237,20 +254,68 @@ bool AudioPlayer::play(const char* filename) {
         delete file;
         file = nullptr;
     }
+    freePsramBuffer();
 
-    // Create new file source
-    file = new AudioFileSourceLittleFS(filename);
+    // Read entire file into PSRAM to eliminate SPI flash contention during decode
+    File f = LittleFS.open(filename, "r");
+    if (!f) {
+        Serial.printf("AudioPlayer: Failed to open %s\n", filename);
+        xSemaphoreGive(audioMutex);
+        return false;
+    }
+
+    psramBufferSize = f.size();
+    if (psramBufferSize == 0) {
+        Serial.printf("AudioPlayer: Empty file %s\n", filename);
+        f.close();
+        xSemaphoreGive(audioMutex);
+        return false;
+    }
+
+    // Debug: dump first 16 bytes to verify file header
+    {
+        uint8_t hdr[16];
+        size_t hdrRead = f.read(hdr, 16);
+        Serial.printf("AudioPlayer: First %u bytes:", hdrRead);
+        for (size_t i = 0; i < hdrRead; i++) Serial.printf(" %02X", hdr[i]);
+        Serial.println();
+        f.seek(0);  // Reset to beginning
+    }
+
+    // WAV decoder is lightweight — read directly from LittleFS (no PSRAM needed).
+    // MP3 decoder is heavy — buffer in PSRAM to avoid flash contention.
+    String fname(filename);
+    bool isWav = fname.endsWith(".wav");
+
+    if (!isWav) {
+        psramBuffer = (uint8_t*)ps_malloc(psramBufferSize);
+        if (psramBuffer) {
+            size_t bytesRead = f.read(psramBuffer, psramBufferSize);
+            f.close();
+            Serial.printf("AudioPlayer: Buffered %u bytes in PSRAM\n", bytesRead);
+            file = new AudioFileSourcePROGMEM(psramBuffer, psramBufferSize);
+        } else {
+            Serial.printf("AudioPlayer: PSRAM alloc failed (%u bytes), using flash\n", psramBufferSize);
+            psramBufferSize = 0;
+            f.close();
+            file = new AudioFileSourceLittleFS(filename);
+        }
+    } else {
+        f.close();
+        file = new AudioFileSourceLittleFS(filename);
+    }
+
     if (!file->isOpen()) {
         Serial.printf("AudioPlayer: Failed to open %s\n", filename);
         delete file;
         file = nullptr;
+        freePsramBuffer();
         xSemaphoreGive(audioMutex);
         return false;
     }
 
     // Pick decoder based on file extension
-    String fname(filename);
-    if (fname.endsWith(".wav")) {
+    if (isWav) {
         generator = new AudioGeneratorWAV();
     } else {
         generator = new AudioGeneratorMP3();
@@ -263,6 +328,7 @@ bool AudioPlayer::play(const char* filename) {
         generator = nullptr;
         delete file;
         file = nullptr;
+        freePsramBuffer();
         xSemaphoreGive(audioMutex);
         return false;
     }
@@ -291,15 +357,24 @@ void AudioPlayer::stop() {
         delete file;
         file = nullptr;
     }
+    freePsramBuffer();
 
     xSemaphoreGive(audioMutex);
+}
+
+void AudioPlayer::freePsramBuffer() {
+    if (psramBuffer) {
+        free(psramBuffer);
+        psramBuffer = nullptr;
+        psramBufferSize = 0;
+    }
 }
 
 /**
  * @brief Check if currently playing
  */
 bool AudioPlayer::isPlaying() const {
-    return generator && generator->isRunning();
+    return (generator && generator->isRunning()) || streamingPCM;
 }
 
 /**
@@ -312,8 +387,11 @@ void AudioPlayer::update() {
 /**
  * @brief Internal update called from audio task
  *
- * Feeds the MP3 decoder until playback completes.
- * Uses mutex to safely access mp3/file shared with main thread.
+ * Decodes multiple MP3 frames per call to reduce mutex overhead.
+ * The blocking I2S write inside ConsumeSample provides natural pacing —
+ * once the DMA buffer is full, each frame blocks for ~48ms until space
+ * frees up. This lets the decoder stay ahead of playback and tolerate
+ * brief CPU stalls from WiFi or other tasks.
  */
 void AudioPlayer::taskUpdate() {
     // Try to acquire mutex (non-blocking to avoid stalling audio task)
@@ -322,16 +400,27 @@ void AudioPlayer::taskUpdate() {
     }
 
     if (generator && generator->isRunning()) {
-        if (!generator->loop()) {
-            // Playback finished
-            generator->stop();
-            delete generator;
-            generator = nullptr;
-            if (file) {
-                delete file;
-                file = nullptr;
+        // Decode multiple frames per mutex hold to reduce overhead.
+        // Blocking I2S writes inside loop() provide natural pacing.
+        for (int i = 0; i < 4; i++) {
+            if (!generator->loop()) {
+                // Playback finished — flush remaining buffered samples
+                ((AudioOutputDuplex*)out)->flush();
+                generator->stop();
+                delete generator;
+                generator = nullptr;
+                if (file) {
+                    delete file;
+                    file = nullptr;
+                }
+                freePsramBuffer();
+                Serial.println("AudioPlayer: Playback finished");
+                break;
             }
-            Serial.println("AudioPlayer: Playback finished");
+        }
+        // Flush any partial buffer from the last frame
+        if (generator) {
+            ((AudioOutputDuplex*)out)->flush();
         }
     }
 
@@ -360,68 +449,129 @@ void AudioPlayer::setVolume(int vol) {
     }
 }
 
+//=============================================================================
+// Streaming PCM (direct to I2S, bypasses AudioGenerator)
+//=============================================================================
+
+bool AudioPlayer::startStreamingPCM(int sampleRate, int channels, int bitsPerSample) {
+    if (!initialized || !out) return false;
+
+    // Stop any file-based playback
+    stop();
+
+    streamChannels = channels;
+    streamTrailingByte = -1;
+
+    // Set source sample rate — ConsumeSample handles Bresenham resampling to 44.1kHz
+    ((AudioOutputDuplex*)out)->SetRate(sampleRate);
+
+    streamingPCM = true;
+    Serial.printf("AudioPlayer: Streaming PCM %dHz %dch %dbit\n", sampleRate, channels, bitsPerSample);
+    return true;
+}
+
+void AudioPlayer::feedPCMBytes(const uint8_t* data, size_t length) {
+    if (!streamingPCM || !out) return;
+
+    size_t offset = 0;
+
+    // Handle leftover byte from previous chunk
+    if (streamTrailingByte >= 0 && length > 0) {
+        uint8_t pair[2] = { (uint8_t)streamTrailingByte, data[0] };
+        int16_t sample;
+        memcpy(&sample, pair, 2);
+        int16_t stereo[2] = { sample, sample };
+        out->ConsumeSample(stereo);
+        offset = 1;
+        streamTrailingByte = -1;
+    }
+
+    // Bytes per frame (mono=2, stereo=4 for 16-bit)
+    size_t frameBytes = streamChannels * 2;
+
+    while ((length - offset) >= frameBytes) {
+        int16_t stereo[2];
+        if (streamChannels == 1) {
+            int16_t sample;
+            memcpy(&sample, data + offset, 2);
+            stereo[0] = sample;
+            stereo[1] = sample;
+        } else {
+            memcpy(&stereo[0], data + offset, 2);
+            memcpy(&stereo[1], data + offset + 2, 2);
+        }
+        out->ConsumeSample(stereo);
+        offset += frameBytes;
+    }
+
+    // Save any trailing byte (mono: 1 leftover byte possible)
+    if (length - offset == 1) {
+        streamTrailingByte = data[offset];
+    }
+}
+
+void AudioPlayer::finishStreamingPCM() {
+    if (!streamingPCM) return;
+    ((AudioOutputDuplex*)out)->flush();
+    streamingPCM = false;
+    streamTrailingByte = -1;
+    Serial.println("AudioPlayer: Streaming PCM finished");
+}
+
+//=============================================================================
+// Mic Gain Control
+//=============================================================================
+
 void AudioPlayer::setMicGain(int sliderValue) {
     if (!es8311Handle) return;
 
-    // Center-zero slider mapping:
-    // - Slider 50 = 0dB (no gain, no attenuation)
-    // - Slider 0-50 = -24dB to 0dB (software attenuation)
-    // - Slider 50-100 = 0dB to +42dB (hardware gain)
+    // The ES8311 mic gain chain:
+    //   Analog PGA (REG14, fixed at init) → ADC → ADC Volume (REG17) → Digital Gain (REG16) → I2S
+    //
+    // Slider mapping (all hardware, no software attenuation needed):
+    //   0-50:   ADC volume (REG17) from 0x00 to 0xA8, digital gain 0dB
+    //   50-100: ADC volume at 0xA8, digital gain (REG16) from 0dB to +42dB
 
-    es8311_mic_gain_t gain;
-    int gainDb = 0;
+    micAttenuation = 1.0f;  // No software attenuation — all gain control in hardware
 
-    if (sliderValue < 50) {
-        // Left side: attenuation -24dB to 0dB
-        // Map 0-50 to attenuation 0.0625 (1/16 = -24dB) to 1.0 (0dB)
-        float t = sliderValue / 50.0f;  // 0.0 to 1.0
-        micAttenuation = 0.0625f + t * (1.0f - 0.0625f);
-        gain = ES8311_MIC_GAIN_0DB;  // Use 0dB hardware gain when attenuating
-        gainDb = 0;
+    if (sliderValue <= 50) {
+        // Map 0-50 to ADC volume register 0x00-0xA8
+        uint8_t adcVol = (uint8_t)((sliderValue / 50.0f) * 0xA8);
+        es8311_microphone_volume_set(es8311Handle, adcVol);
+        es8311_microphone_gain_set(es8311Handle, ES8311_MIC_GAIN_0DB);
 
-        // Calculate attenuation in dB for display
-        float attenDb = 20.0f * log10f(micAttenuation);
-        Serial.printf("Mic gain: %+.1fdB (slider=%d, attenuation=%.3f)\n", attenDb, sliderValue, micAttenuation);
+        Serial.printf("Mic gain: slider=%d, REG17=0x%02X, REG16=0dB\n", sliderValue, adcVol);
     } else {
-        // Right side: positive gain 0dB to +42dB
-        // No software attenuation
-        micAttenuation = 1.0f;
+        // Keep ADC volume at max useful level, add digital gain
+        es8311_microphone_volume_set(es8311Handle, 0xA8);
 
-        // Map 50-100 to gain 0-42dB (8 levels)
         int gainRange = sliderValue - 50;  // 0-50
+        es8311_mic_gain_t gain;
+        int gainDb;
 
         if (gainRange < 7) {
-            gain = ES8311_MIC_GAIN_0DB;
-            gainDb = 0;
+            gain = ES8311_MIC_GAIN_0DB; gainDb = 0;
         } else if (gainRange < 14) {
-            gain = ES8311_MIC_GAIN_6DB;
-            gainDb = 6;
+            gain = ES8311_MIC_GAIN_6DB; gainDb = 6;
         } else if (gainRange < 21) {
-            gain = ES8311_MIC_GAIN_12DB;
-            gainDb = 12;
+            gain = ES8311_MIC_GAIN_12DB; gainDb = 12;
         } else if (gainRange < 28) {
-            gain = ES8311_MIC_GAIN_18DB;
-            gainDb = 18;
+            gain = ES8311_MIC_GAIN_18DB; gainDb = 18;
         } else if (gainRange < 35) {
-            gain = ES8311_MIC_GAIN_24DB;
-            gainDb = 24;
+            gain = ES8311_MIC_GAIN_24DB; gainDb = 24;
         } else if (gainRange < 42) {
-            gain = ES8311_MIC_GAIN_30DB;
-            gainDb = 30;
+            gain = ES8311_MIC_GAIN_30DB; gainDb = 30;
         } else if (gainRange < 49) {
-            gain = ES8311_MIC_GAIN_36DB;
-            gainDb = 36;
+            gain = ES8311_MIC_GAIN_36DB; gainDb = 36;
         } else {
-            gain = ES8311_MIC_GAIN_42DB;
-            gainDb = 42;
+            gain = ES8311_MIC_GAIN_42DB; gainDb = 42;
         }
 
-        Serial.printf("Mic gain: +%ddB (slider=%d)\n", gainDb, sliderValue);
+        es8311_microphone_gain_set(es8311Handle, gain);
+        Serial.printf("Mic gain: slider=%d, REG17=0xA8, REG16=+%ddB\n", sliderValue, gainDb);
     }
 
-    es8311_microphone_gain_set(es8311Handle, gain);
-
-    // Update I2SDuplex with attenuation factor
+    // Update I2SDuplex with attenuation factor (1.0 since all gain is in hardware)
     I2SDuplex& i2s = I2SDuplex::getInstance();
     i2s.setMicAttenuation(micAttenuation);
 }

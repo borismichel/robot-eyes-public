@@ -156,6 +156,20 @@ esp_err_t es8311_voice_mute(es8311_handle_t dev, bool enable);
 esp_err_t es8311_microphone_gain_set(es8311_handle_t dev, es8311_mic_gain_t gain_db);
 
 /**
+ * @brief Set ADC digital volume (register 0x17)
+ *
+ * Controls the ADC signal level after the analog PGA stage.
+ * Higher values = louder.
+ *
+ * @param dev ES8311 handle
+ * @param[in] volume ADC volume register value (0x00-0xFF)
+ * @return
+ *     - ESP_OK success
+ *     - Else fail
+ */
+esp_err_t es8311_microphone_volume_set(es8311_handle_t dev, uint8_t volume);
+
+/**
  * @brief Configure microphone
  *
  * @param dev ES8311 handle

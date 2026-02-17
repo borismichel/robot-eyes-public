@@ -21,6 +21,9 @@
 #include <ArduinoJson.h>
 #include <vector>
 
+// Forward declaration
+class OAuthClient;
+
 //=============================================================================
 // Configuration
 //=============================================================================
@@ -50,18 +53,30 @@ struct MCPRemoteTool {
 };
 
 /**
+ * @enum MCPAuthMode
+ * @brief Authentication mode for an MCP server
+ */
+enum class MCPAuthMode : uint8_t {
+    ApiKey = 0,   ///< Static Bearer token (existing behavior)
+    OAuth  = 1    ///< OAuth 2.1 Authorization Code + PKCE
+};
+
+/**
  * @struct MCPServerConfig
  * @brief Configuration for an MCP server connection
  */
 struct MCPServerConfig {
     String name;          ///< Display name for the server
     String url;           ///< Server URL (e.g., http://192.168.1.100:8080)
-    String apiKey;        ///< Optional API key for authentication
+    String apiKey;        ///< API key for Bearer token auth (when authMode == ApiKey)
+    MCPAuthMode authMode; ///< Authentication mode
+    String clientId;      ///< OAuth client_id (manual or from Dynamic Registration)
+    String clientSecret;  ///< OAuth client_secret (optional, for confidential clients)
     bool enabled;         ///< Whether this server is active
     bool connected;       ///< Whether we successfully connected
     String lastError;     ///< Last error message if any
 
-    MCPServerConfig() : enabled(true), connected(false) {}
+    MCPServerConfig() : authMode(MCPAuthMode::ApiKey), enabled(true), connected(false) {}
 };
 
 //=============================================================================
@@ -86,6 +101,16 @@ public:
      * @brief Cleanup
      */
     void end();
+
+    /**
+     * @brief Get the OAuth client (for web server endpoints)
+     */
+    OAuthClient* getOAuthClient() { return oauthClient; }
+
+    /**
+     * @brief Get mutable server list (for web server to update auth fields)
+     */
+    std::vector<MCPServerConfig>& getServers() { return servers; }
 
     //-------------------------------------------------------------------------
     // Server Management
@@ -202,6 +227,12 @@ private:
     String makeRequest(const char* url, const char* method, const char* body, const char* apiKey);
 
     /**
+     * @brief Make HTTP request with OAuth support and 401 retry
+     */
+    String makeRequestWithRetry(const char* url, const char* method, const char* body,
+                                 const char* apiKey, int serverIndex);
+
+    /**
      * @brief Parse tools from server response
      */
     void parseTools(int serverIndex, const char* response);
@@ -212,6 +243,7 @@ private:
     int countToolsForServer(int index) const;
 
     bool initialized;
+    OAuthClient* oauthClient;
     std::vector<MCPServerConfig> servers;
     std::vector<MCPRemoteTool> tools;
 };

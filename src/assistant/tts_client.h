@@ -79,7 +79,7 @@ struct VoiceConfig {
 
     VoiceConfig() {
         strcpy(openAIVoice, "nova");
-        speed = 1.0f;
+        speed = 0.85f;
     }
 };
 
@@ -212,9 +212,8 @@ private:
     VoiceConfig voiceConfig;
     bool initialized;
 
-    // HTTP client
+    // HTTP (no persistent client — created on-demand per request to save ~40KB heap)
     HTTPClient http;
-    NetworkClientSecure* secureClient;
     int contentLength;
     size_t bytesReceived;
 

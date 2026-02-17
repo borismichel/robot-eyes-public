@@ -25,6 +25,8 @@ VoiceInput::VoiceInput()
     , speechStartTime(0)
     , silenceStartTime(0)
     , lastSpeechTime(0)
+    , hpfPrevInput(0.0f)
+    , hpfPrevOutput(0.0f)
     , audioDataCallback(nullptr)
 {
     memset(captureBuffer, 0, sizeof(captureBuffer));
@@ -153,6 +155,8 @@ void VoiceInput::startListening() {
     endOfSpeechDetected = false;
     speechStartTime = 0;
     silenceStartTime = 0;
+    hpfPrevInput = 0.0f;
+    hpfPrevOutput = 0.0f;
 
     // Enable mic if not already
     I2SDuplex& i2s = I2SDuplex::getInstance();
@@ -245,49 +249,55 @@ size_t VoiceInput::peek(uint8_t* buffer, size_t maxBytes) {
 //=============================================================================
 
 void VoiceInput::captureAudio() {
-    static bool dumpedRaw = false;  // One-shot raw sample dump
-
     I2SDuplex& i2s = I2SDuplex::getInstance();
     if (!i2s.isInitialized()) return;
 
-    // Read up to 8 batches (matching DMA buffer count) per frame.
-    // Non-blocking ring buffer send — break if full (consumer needs to catch up).
-    for (int reads = 0; reads < 8; reads++) {
+    // Read up to 24 batches per frame to drain the RX DMA buffer (12×1024 frames).
+    for (int reads = 0; reads < 24; reads++) {
         size_t samplesRead = i2s.read(captureBuffer, VOICE_CAPTURE_SAMPLES);
         if (samplesRead == 0) break;
 
-        // I2S RX returns stereo interleaved data (L,R,L,R,...) because TX and
-        // RX share the same I2S bus configured for stereo.  Extract left channel.
-        size_t frames = samplesRead / 2;  // stereo frames
-        for (size_t i = 0; i < frames; i++) {
-            captureBuffer[i] = captureBuffer[i * 2];  // left channel only
+        // I2S RX is stereo (shared bus with stereo TX). ES8311 ADC is mono,
+        // outputting on left channel only. Extract left from interleaved L,R,L,R.
+        size_t monoSamples = samplesRead / 2;
+        for (size_t i = 0; i < monoSamples; i++) {
+            captureBuffer[i] = captureBuffer[i * 2];
         }
 
-        // One-shot: dump raw samples for diagnosis
-        if (!dumpedRaw && frames >= 10) {
-            dumpedRaw = true;
-            Serial.printf("[VoiceInput] RAW left-channel samples (%d frames from %d i16s), first 10:\n", frames, samplesRead);
-            for (int i = 0; i < 10 && i < (int)frames; i++) {
-                Serial.printf("  [%d] = %6d\n", i, captureBuffer[i]);
-            }
-            int16_t minV = 32767, maxV = -32768;
-            int64_t sumAbs = 0;
-            for (size_t i = 0; i < frames; i++) {
-                if (captureBuffer[i] < minV) minV = captureBuffer[i];
-                if (captureBuffer[i] > maxV) maxV = captureBuffer[i];
-                sumAbs += abs(captureBuffer[i]);
-            }
-            Serial.printf("[VoiceInput] Stats: min=%d max=%d avg=%.1f monoSamples=%d\n",
-                          minV, maxV, (float)sumAbs / frames, frames);
+        // DC offset removal: single-pole high-pass filter
+        // y[n] = alpha * (y[n-1] + x[n] - x[n-1])
+        // alpha = 0.995 gives ~35Hz cutoff at 44.1kHz, removing DC bias from the ADC
+        const float alpha = 0.995f;
+        float atten = i2s.getMicAttenuation();
+        int32_t peak = 0;
+        for (size_t i = 0; i < monoSamples; i++) {
+            float input = (float)captureBuffer[i];
+            hpfPrevOutput = alpha * (hpfPrevOutput + input - hpfPrevInput);
+            hpfPrevInput = input;
+            // Apply mic attenuation (from gain slider)
+            float out = hpfPrevOutput * atten;
+            int32_t sample = constrain((int32_t)out, -32767, 32767);
+            captureBuffer[i] = (int16_t)sample;
+            int32_t absSample = sample < 0 ? -sample : sample;
+            if (absSample > peak) peak = absSample;
         }
 
-        // Update mic level from captured data (avoids getMicLevel() which
-        // would consume I2S data separately, stealing audio from capture)
-        currentLevel = calculateRMS(captureBuffer, frames);
+        // Peak normalization: if signal is clipping (peak > 28000 ≈ 85% full scale),
+        // scale all samples down to target peak of 24000 (~73% full scale).
+        // This prevents Whisper hallucinations from flat-topped clipped waveforms.
+        if (peak > 28000) {
+            float normGain = 24000.0f / (float)peak;
+            for (size_t i = 0; i < monoSamples; i++) {
+                captureBuffer[i] = (int16_t)((float)captureBuffer[i] * normGain);
+            }
+        }
+
+        // Update mic level from captured data
+        currentLevel = calculateRMS(captureBuffer, monoSamples);
 
         // Downsample to 16kHz mono for speech recognition
         size_t downsampledCount;
-        downsampleTo16kHz(captureBuffer, frames, downsampleBuffer, &downsampledCount);
+        downsampleTo16kHz(captureBuffer, monoSamples, downsampleBuffer, &downsampledCount);
 
         if (downsampledCount > 0) {
             size_t bytesToWrite = downsampledCount * sizeof(int16_t);

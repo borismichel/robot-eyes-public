@@ -264,6 +264,11 @@ private:
     uint32_t silenceStartTime;
     uint32_t lastSpeechTime;
 
+    // DC offset removal (single-pole high-pass filter)
+    // y[n] = alpha * (y[n-1] + x[n] - x[n-1]), alpha=0.995 → ~35Hz cutoff at 44.1kHz
+    float hpfPrevInput;
+    float hpfPrevOutput;
+
     // Direct audio callback (bypasses ring buffer)
     AudioDataCallback audioDataCallback;
 };
