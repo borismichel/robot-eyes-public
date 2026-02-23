@@ -30,6 +30,12 @@ Assistant::Assistant()
     , processingStartTime(0)
     , ttsAudioWritePos(0)
     , ttsInterrupted(false)
+    , ttsPrebuffer(nullptr)
+    , ttsPrebufferPos(0)
+    , ttsPrebufferSize(0)
+    , ttsSampleRate(0)
+    , ttsChannels(0)
+    , ttsBitsPerSample(0)
     , voiceTaskHandle(nullptr)
     , voiceProcessSem(nullptr)
     , stateCallback(nullptr)
@@ -102,6 +108,10 @@ bool Assistant::begin(const AssistantConfig& cfg) {
     ttsClient.onStateChange([this](TTSState ttsState) {
         if (ttsState == TTSState::Complete) {
             Serial.printf("[Assistant] TTS complete, streamed %d bytes\n", ttsAudioWritePos);
+            // Drain any remaining pre-buffer (short audio that didn't fill threshold)
+            if (ttsPrebuffer) {
+                drainPrebuffer();
+            }
             if (audioPlayer.isStreamingPCM()) {
                 audioPlayer.finishStreamingPCM();
             }
@@ -245,11 +255,12 @@ void Assistant::onWakeWord() {
 
 void Assistant::interrupt() {
     if (state == AssistantState::Speaking) {
-        if (audioPlayer.isStreamingPCM()) {
+        if (audioPlayer.isStreamingPCM() || ttsPrebuffer) {
             // Streaming from voice task — can't call ttsClient.stop() (not thread-safe).
             // Set flag so handleTTSAudio discards remaining data.
             ttsInterrupted = true;
-            audioPlayer.finishStreamingPCM();
+            if (ttsPrebuffer) { free(ttsPrebuffer); ttsPrebuffer = nullptr; }
+            if (audioPlayer.isStreamingPCM()) audioPlayer.finishStreamingPCM();
         } else {
             ttsClient.stop();
             audioPlayer.stop();
@@ -281,6 +292,7 @@ bool Assistant::say(const char* text) {
     // speak() blocks — handleTTSAudio streams PCM as chunks arrive.
     ttsAudioWritePos = 0;
     ttsInterrupted = false;
+    if (ttsPrebuffer) { free(ttsPrebuffer); ttsPrebuffer = nullptr; }
     ttsClient.speak(text);
 
     return true;
@@ -478,10 +490,28 @@ void Assistant::playResponse(const char* text) {
     // Speaking state is set as soon as the WAV header is parsed (~first chunk).
     ttsAudioWritePos = 0;
     ttsInterrupted = false;
+    if (ttsPrebuffer) { free(ttsPrebuffer); ttsPrebuffer = nullptr; }
 
     // speak() blocks while audio streams to I2S via handleTTSAudio callback.
     // The voice task is blocked, but the main loop continues (FreeRTOS scheduling).
     ttsClient.speak(text);
+}
+
+// Pre-buffer: ~500ms at 24kHz mono 16-bit = 24000 bytes
+// This fills the I2S DMA before playback starts, preventing underruns from WiFi jitter.
+#define TTS_PREBUFFER_BYTES 24000
+
+void Assistant::drainPrebuffer() {
+    if (!ttsPrebuffer) return;
+    Serial.printf("[Assistant] Draining pre-buffer (%d bytes)\n", ttsPrebufferPos);
+    audioPlayer.startStreamingPCM(ttsSampleRate, ttsChannels, ttsBitsPerSample);
+    setState(AssistantState::Speaking);
+    speakingStartTime = millis();
+    if (ttsPrebufferPos > 0) {
+        audioPlayer.feedPCMBytes(ttsPrebuffer, ttsPrebufferPos);
+    }
+    free(ttsPrebuffer);
+    ttsPrebuffer = nullptr;
 }
 
 void Assistant::handleTTSAudio(const uint8_t* data, size_t length) {
@@ -498,22 +528,46 @@ void Assistant::handleTTSAudio(const uint8_t* data, size_t length) {
 
         if (ttsAudioWritePos >= 44) {
             // Parse WAV header fields
-            int sampleRate;
-            int16_t channels, bitsPerSample;
-            memcpy(&sampleRate, ttsWavHeader + 24, 4);
-            memcpy(&channels, ttsWavHeader + 22, 2);
-            memcpy(&bitsPerSample, ttsWavHeader + 34, 2);
+            memcpy(&ttsSampleRate, ttsWavHeader + 24, 4);
+            memcpy(&ttsChannels, ttsWavHeader + 22, 2);
+            memcpy(&ttsBitsPerSample, ttsWavHeader + 34, 2);
 
             Serial.printf("[Assistant] TTS WAV: %dHz %dch %dbit\n",
-                          sampleRate, (int)channels, (int)bitsPerSample);
+                          ttsSampleRate, (int)ttsChannels, (int)ttsBitsPerSample);
 
-            audioPlayer.startStreamingPCM(sampleRate, channels, bitsPerSample);
-            setState(AssistantState::Speaking);
-            speakingStartTime = millis();
+            // Allocate PSRAM pre-buffer to absorb WiFi jitter
+            ttsPrebuffer = (uint8_t*)ps_malloc(TTS_PREBUFFER_BYTES);
+            ttsPrebufferPos = 0;
+            ttsPrebufferSize = TTS_PREBUFFER_BYTES;
+            if (!ttsPrebuffer) {
+                // PSRAM unavailable — fall back to direct streaming
+                Serial.println("[Assistant] Pre-buffer alloc failed, streaming directly");
+                audioPlayer.startStreamingPCM(ttsSampleRate, ttsChannels, ttsBitsPerSample);
+                setState(AssistantState::Speaking);
+                speakingStartTime = millis();
+            }
         }
     }
 
-    // Stream PCM data directly to I2S (blocks on DMA when buffer full)
+    if (length == 0) return;
+
+    // Pre-buffer phase: accumulate in PSRAM before starting I2S
+    if (ttsPrebuffer) {
+        size_t space = ttsPrebufferSize - ttsPrebufferPos;
+        size_t toCopy = (length < space) ? length : space;
+        memcpy(ttsPrebuffer + ttsPrebufferPos, data, toCopy);
+        ttsPrebufferPos += toCopy;
+        data += toCopy;
+        length -= toCopy;
+        ttsAudioWritePos += toCopy;
+
+        // Pre-buffer full — start I2S and drain
+        if (ttsPrebufferPos >= ttsPrebufferSize) {
+            drainPrebuffer();
+        }
+    }
+
+    // Direct streaming phase (after pre-buffer drained)
     if (length > 0 && audioPlayer.isStreamingPCM()) {
         audioPlayer.feedPCMBytes(data, length);
         ttsAudioWritePos += length;

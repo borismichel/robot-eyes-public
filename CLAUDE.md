@@ -21,7 +21,7 @@ There are TWO folders/repos:
 ### Version File
 Version is defined in `include/version.h`:
 ```cpp
-#define FIRMWARE_VERSION "2.1.0"
+#define FIRMWARE_VERSION "2.1.1"
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 ```
 
@@ -79,7 +79,7 @@ releases/
 
 ---
 
-## Architecture Overview (v2.1.0)
+## Architecture Overview (v2.1.1)
 
 The firmware uses a modular class-based architecture. Each module follows the `begin(deps...)`/`update()` lifecycle pattern and owns its own state. `main.cpp` (~1,464 lines) serves as the orchestrator: it wires modules together in `setup()` and runs the frame loop in `loop()`.
 
@@ -297,6 +297,7 @@ Voice assistant stack in `src/assistant/`:
 - **Assistant** (`assistant.h`): Main orchestrator tying STT -> LLM -> TTS together
   - Voice pipeline runs on dedicated FreeRTOS task (Core 1, priority 2)
   - TTS streams PCM directly to I2S (WAV header parsed from first 44 bytes)
+  - PSRAM pre-buffer (24KB, ~500ms) absorbs WiFi jitter before I2S starts
   - `ttsInterrupted` volatile flag for thread-safe interrupt during streaming
 
 ### Device Tools (`device_tools.h`)

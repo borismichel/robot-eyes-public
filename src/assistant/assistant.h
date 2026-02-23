@@ -357,6 +357,16 @@ private:
     uint8_t ttsWavHeader[44];       ///< Buffer for WAV header parsing
     volatile bool ttsInterrupted;   ///< Flag to discard remaining TTS data
 
+    // TTS pre-buffer: accumulate PCM in PSRAM before starting I2S to avoid DMA underruns
+    uint8_t* ttsPrebuffer;          ///< PSRAM pre-buffer (null when not buffering)
+    size_t ttsPrebufferPos;         ///< Bytes written to pre-buffer
+    size_t ttsPrebufferSize;        ///< Total pre-buffer capacity
+    int ttsSampleRate;              ///< Saved from WAV header for deferred startStreamingPCM
+    int16_t ttsChannels;            ///< Saved from WAV header
+    int16_t ttsBitsPerSample;       ///< Saved from WAV header
+
+    void drainPrebuffer();          ///< Start I2S and feed pre-buffered data
+
     // Voice processing background task
     TaskHandle_t voiceTaskHandle;
     SemaphoreHandle_t voiceProcessSem;

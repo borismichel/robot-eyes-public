@@ -32,7 +32,7 @@ Expressive robot eyes for ESP32-S3 with AMOLED display, voice assistant, and MCP
 ### Voice Assistant
 - **LLM**: Claude (Sonnet 4) or OpenAI (GPT-4o), user-configurable
 - **Speech-to-Text**: OpenAI Whisper (streaming 16kHz mono)
-- **Text-to-Speech**: OpenAI TTS (streaming PCM — audio starts in ~1-2 seconds)
+- **Text-to-Speech**: OpenAI TTS (streaming PCM with PSRAM pre-buffer for smooth playback)
 - **Wake word**: ESP-SR local detection ("Hey Buddy"), no cloud required
 - **Tap-to-Listen**: Single tap starts listening, second tap stops and processes
 - **STT Language**: Configurable Whisper language hint (ISO 639-1) for improved accuracy
@@ -399,9 +399,9 @@ The display is physically rotated 90 degrees CCW:
 
 - **Rendering**: 30fps software per-pixel evaluation, RGB565 framebuffer in PSRAM
 - **Optimization**: Dirty-rect clearing, partial screen blit, shape-aware bounds
-- **Processing**: Display on Core 1, audio decoding on Core 0, voice pipeline on Core 1 task, MCP server on dedicated task
+- **Processing**: Display on Core 1, audio decoding on Core 0 (with yield during streaming), voice pipeline on Core 1 task, MCP server on dedicated task
 - **Storage**: Settings persisted via Preferences (NVS), audio via LittleFS, OAuth tokens via NVS
-- **Memory**: ~20% RAM, ~26% Flash (v2.1.0)
+- **Memory**: ~20% RAM, ~26% Flash (v2.1.1)
 
 ### Dependencies
 - `lvgl/lvgl@^8.4.0` - Display driver

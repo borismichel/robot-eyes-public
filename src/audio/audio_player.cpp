@@ -1,15 +1,17 @@
 /**
  * @file audio_player.cpp
- * @brief MP3 audio playback implementation using full-duplex I2S
+ * @brief Audio playback implementation using full-duplex I2S
  *
- * Uses ESP8266Audio library for MP3 decoding with a custom AudioOutput
- * that shares the I2S bus with microphone input (full-duplex operation).
+ * Supports two playback modes:
+ * - File-based: MP3/WAV decoding via ESP8266Audio library
+ * - Streaming PCM: Direct I2S feed for TTS audio (bypasses AudioGenerator)
  *
- * Runs on a dedicated FreeRTOS task on Core 0 for smooth playback while
- * the main display loop runs on Core 1.
+ * Uses a custom AudioOutput that shares the I2S bus with microphone input
+ * (full-duplex operation). Runs on a dedicated FreeRTOS task on Core 0
+ * for smooth playback while the main display loop runs on Core 1.
  *
  * @author Robot Eyes Project
- * @date 2025
+ * @date 2026
  */
 
 #include "audio_player.h"
@@ -56,10 +58,10 @@ void audioTask(void* parameter) {
     AudioPlayer* player = (AudioPlayer*)parameter;
     while (true) {
         player->taskUpdate();
-        if (!player->isPlaying()) {
-            vTaskDelay(pdMS_TO_TICKS(10));  // Idle: save CPU
+        if (!player->isPlaying() || player->isStreamingPCM()) {
+            vTaskDelay(pdMS_TO_TICKS(10));  // Idle or streaming: yield to avoid starving IDLE0
         }
-        // During playback: no delay — blocking I2S write yields naturally
+        // During file playback: no delay — blocking I2S write yields naturally
     }
 }
 
@@ -461,6 +463,9 @@ bool AudioPlayer::startStreamingPCM(int sampleRate, int channels, int bitsPerSam
 
     streamChannels = channels;
     streamTrailingByte = -1;
+
+    // Re-enable the output (previous file-based playback may have called stop())
+    ((AudioOutputDuplex*)out)->begin();
 
     // Set source sample rate — ConsumeSample handles Bresenham resampling to 44.1kHz
     ((AudioOutputDuplex*)out)->SetRate(sampleRate);
